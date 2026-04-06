@@ -1,0 +1,18 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "change-tracker-marketplace",
+  "description": "Change Tracker plugin for Claude Code — visual changelog of all code edits",
+  "owner": {
+    "name": "Martin Rodriguez",
+    "url": "https://github.com/Martinrodriguezc"
+  },
+  "plugins": [
+    {
+      "name": "change-tracker",
+      "description": "Automatically tracks all code changes during Claude Code sessions and generates a visual HTML diff report with colored diffs, detailed explanations, file navigation, and category filters.",
+      "source": "./plugins/change-tracker",
+      "category": "development",
+      "homepage": "https://github.com/Martinrodriguezc/change-tracker"
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "change-tracker",
+  "description": "Automatically tracks all code changes during Claude Code sessions into a visual HTML changelog with colored diffs and detailed explanations. Works proactively (from task start) or retroactively (after changes were made).",
+  "author": {
+    "name": "Martin",
+    "url": "https://github.com/Martinrodriguezc"
+  }
+}
