@@ -1,7 +1,7 @@
 #!/bin/bash
 # Change Tracker — PostToolUse hook for Edit/Write auto-capture
 # Captures every Edit/Write to /tmp/claude-change-tracker.jsonl
-# Then regenerates the live HTML report in background.
+# Then regenerates the live HTML report.
 
 CHANGELOG="/tmp/claude-change-tracker.jsonl"
 LIVE_HTML="/tmp/claude-changelog-live.html"
@@ -14,7 +14,7 @@ cat > "$INPUT_FILE"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # 1. Capture the change (fast, ~20ms)
-python3 "$SCRIPT_DIR/hook_capture_worker.py" "$CHANGELOG" "$INPUT_FILE" 2>/dev/null
+python3 "$SCRIPT_DIR/hook_capture_worker.py" "$CHANGELOG" "$INPUT_FILE" >/dev/null 2>&1
 
 rm -f "$INPUT_FILE"
 
@@ -22,13 +22,12 @@ rm -f "$INPUT_FILE"
 FIRST_RUN=false
 [ ! -f "$LIVE_HTML" ] && FIRST_RUN=true
 
-# 3. Regenerate HTML + open browser in fully detached background
-(
-  python3 "$SCRIPT_DIR/generate_changelog.py" --live --no-open 2>/dev/null
-  if [ "$FIRST_RUN" = true ] && [ -f "$LIVE_HTML" ]; then
-    open "$LIVE_HTML" 2>/dev/null || xdg-open "$LIVE_HTML" 2>/dev/null
-  fi
-) </dev/null >/dev/null 2>&1 &
-disown 2>/dev/null
+# 3. Regenerate HTML (sync — typically <100ms)
+python3 "$SCRIPT_DIR/generate_changelog.py" --live --no-open >/dev/null 2>&1
+
+# 4. Open browser on first change only
+if [ "$FIRST_RUN" = true ] && [ -f "$LIVE_HTML" ]; then
+  open "$LIVE_HTML" >/dev/null 2>&1
+fi
 
 exit 0
