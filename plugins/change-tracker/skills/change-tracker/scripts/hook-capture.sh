@@ -22,13 +22,13 @@ rm -f "$INPUT_FILE"
 FIRST_RUN=false
 [ ! -f "$LIVE_HTML" ] && FIRST_RUN=true
 
-# 3. Regenerate HTML in background (fire-and-forget)
-(python3 "$SCRIPT_DIR/generate_changelog.py" --live --no-open 2>/dev/null) &
-
-# 4. Open browser on first change only
-if [ "$FIRST_RUN" = true ]; then
-  sleep 0.5
-  open "$LIVE_HTML" 2>/dev/null || xdg-open "$LIVE_HTML" 2>/dev/null &
-fi
+# 3. Regenerate HTML + open browser in fully detached background
+(
+  python3 "$SCRIPT_DIR/generate_changelog.py" --live --no-open 2>/dev/null
+  if [ "$FIRST_RUN" = true ] && [ -f "$LIVE_HTML" ]; then
+    open "$LIVE_HTML" 2>/dev/null || xdg-open "$LIVE_HTML" 2>/dev/null
+  fi
+) </dev/null >/dev/null 2>&1 &
+disown 2>/dev/null
 
 exit 0
