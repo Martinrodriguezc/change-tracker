@@ -18,9 +18,10 @@ You do NOT need to invoke this skill for the live report — it works automatica
 
 The plugin hooks handle everything:
 1. **PreToolUse** saves the current file content before `Write` overwrites it
-2. **PostToolUse** captures the change and regenerates the HTML in background
+2. **PostToolUse** captures the change, regenerates the HTML, and launches a Claude-powered explanation in the background
 3. Browser opens automatically on the first change
 4. HTML auto-refreshes every 3 seconds, preserving scroll position, search, and filters
+5. Each change gets a concise AI-generated explanation (added asynchronously without blocking edits)
 
 The live report is always at: `/tmp/claude-changelog-live.html`
 

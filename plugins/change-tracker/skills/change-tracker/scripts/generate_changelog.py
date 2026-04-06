@@ -11,7 +11,6 @@ import json
 import sys
 import difflib
 import webbrowser
-import html as html_module
 from pathlib import Path
 from datetime import datetime
 from collections import Counter, defaultdict
@@ -147,32 +146,26 @@ def compute_diff(old_text: str, new_text: str) -> list:
     return lines
 
 
-def compute_stats(changes: list) -> dict:
-    """Compute summary statistics."""
+def compute_stats(processed: list) -> dict:
+    """Compute summary statistics from already-processed changes with diff_lines."""
     files = set()
     lines_added = 0
     lines_removed = 0
     by_category = Counter()
 
-    for change in changes:
+    for change in processed:
         files.add(change.get("file", "unknown"))
         by_category[change.get("category", "other")] += 1
 
-        old_text = change.get("old_text", "")
-        new_text = change.get("new_text", "")
-        old_lines = old_text.splitlines() if old_text else []
-        new_lines = new_text.splitlines() if new_text else []
-
-        diff = list(difflib.unified_diff(old_lines, new_lines, lineterm="", n=2))
-        for line in diff[2:]:  # Skip headers
-            if line.startswith("+") and not line.startswith("+++"):
+        for line in change.get("diff_lines", []):
+            if line["type"] == "add":
                 lines_added += 1
-            elif line.startswith("-") and not line.startswith("---"):
+            elif line["type"] == "remove":
                 lines_removed += 1
 
     return {
         "files_changed": len(files),
-        "total_edits": len(changes),
+        "total_edits": len(processed),
         "lines_added": lines_added,
         "lines_removed": lines_removed,
         "by_category": dict(by_category),
@@ -237,7 +230,7 @@ def build_embedded_data(changelog: dict) -> dict:
     return {
         "task": changelog.get("task", ""),
         "timestamp": changelog.get("timestamp", ""),
-        "stats": compute_stats(changes),
+        "stats": compute_stats(processed),
         "changes": processed,
         "files": files,
         "categories": categories,
@@ -1101,36 +1094,25 @@ function renderChanges() {
         toggle.className = 'diff-collapse-toggle';
         toggle.textContent = 'Mostrar diff completo (' + diffLines.length + ' lineas)';
         let expanded = false;
+        function fillTable(lines) {
+          table.innerHTML = '';
+          lines.forEach(line => {
+            const tr = document.createElement('tr');
+            tr.className = 'diff-' + line.type;
+            tr.innerHTML =
+              '<td class="line-num">' + (line.old_num != null ? line.old_num : '') + '</td>'
+              + '<td class="line-num">' + (line.new_num != null ? line.new_num : '') + '</td>'
+              + '<td class="line-sign">' + (line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ') + '</td>'
+              + '<td class="line-content">' + renderLineContentHtml(line) + '</td>';
+            table.appendChild(tr);
+          });
+        }
         toggle.addEventListener('click', () => {
-          if (!expanded) {
-            table.innerHTML = '';
-            diffLines.forEach(line => {
-              const tr = document.createElement('tr');
-              tr.className = 'diff-' + line.type;
-              tr.innerHTML =
-                '<td class="line-num">' + (line.old_num != null ? line.old_num : '') + '</td>'
-                + '<td class="line-num">' + (line.new_num != null ? line.new_num : '') + '</td>'
-                + '<td class="line-sign">' + (line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ') + '</td>'
-                + '<td class="line-content">' + renderLineContentHtml(line) + '</td>';
-              table.appendChild(tr);
-            });
-            toggle.textContent = 'Colapsar diff';
-            expanded = true;
-          } else {
-            table.innerHTML = '';
-            diffLines.slice(0, 100).forEach(line => {
-              const tr = document.createElement('tr');
-              tr.className = 'diff-' + line.type;
-              tr.innerHTML =
-                '<td class="line-num">' + (line.old_num != null ? line.old_num : '') + '</td>'
-                + '<td class="line-num">' + (line.new_num != null ? line.new_num : '') + '</td>'
-                + '<td class="line-sign">' + (line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ') + '</td>'
-                + '<td class="line-content">' + renderLineContentHtml(line) + '</td>';
-              table.appendChild(tr);
-            });
-            toggle.textContent = 'Mostrar diff completo (' + diffLines.length + ' lineas)';
-            expanded = false;
-          }
+          expanded = !expanded;
+          fillTable(expanded ? diffLines : diffLines.slice(0, 100));
+          toggle.textContent = expanded
+            ? 'Colapsar diff'
+            : 'Mostrar diff completo (' + diffLines.length + ' lineas)';
         });
         diffContainer.appendChild(toggle);
       }
@@ -1610,9 +1592,9 @@ def load_changelog(path: Path) -> dict:
         try:
             entry = json.loads(line)
             entry.setdefault("id", i)
-            # Use Claude-generated explanation if available
-            if i in explanations and not entry.get("reason"):
-                entry["reason"] = explanations[i]
+            change_id = entry["id"]
+            if change_id in explanations and not entry.get("reason"):
+                entry["reason"] = explanations[change_id]
             entry.setdefault("reason", "")
             entry.setdefault("category", "other")
             entry.setdefault("pros", [])
@@ -1622,9 +1604,13 @@ def load_changelog(path: Path) -> dict:
         except json.JSONDecodeError:
             continue
 
+    timestamp = datetime.now().isoformat()
+    if changes and "timestamp" in changes[0]:
+        timestamp = changes[0]["timestamp"]
+
     return {
         "task": "Session changes",
-        "timestamp": changes[0]["timestamp"] if changes else datetime.now().isoformat(),
+        "timestamp": timestamp,
         "changes": changes,
     }
 

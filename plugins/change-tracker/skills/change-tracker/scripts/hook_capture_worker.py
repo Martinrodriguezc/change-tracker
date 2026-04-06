@@ -41,7 +41,7 @@ def main():
         old_text = tool_input.get("old_string", "")
         new_text = tool_input.get("new_string", "")
         change_type = "edit"
-    elif tool_name == "Write":
+    else:  # Write
         new_text = tool_input.get("content", "")
 
         # Try to recover old content from PreToolUse capture
@@ -59,8 +59,6 @@ def main():
                 pass
 
         change_type = "create" if not old_text else "rewrite"
-    else:
-        sys.exit(0)
 
     # Count existing entries to determine the change ID
     change_id = 1

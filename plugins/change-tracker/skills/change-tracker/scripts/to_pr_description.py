@@ -64,10 +64,7 @@ def main():
             line += f" — {first_sentence}"
         lines.append(line)
 
-    all_cons = []
-    for c in changes:
-        for con in c.get("cons", []):
-            all_cons.append(con)
+    all_cons = [con for c in changes for con in c.get("cons", [])]
     if all_cons:
         lines.append("\n## Trade-offs\n")
         for con in all_cons:

@@ -1,36 +1,40 @@
 #!/bin/bash
 # Generates a Claude-powered explanation for a code change.
 # Called in background by hook-capture.sh — does NOT block the hook.
-# Writes the explanation to /tmp/claude-change-tracker-explanations.jsonl
 
 EXPLANATIONS_FILE="/tmp/claude-change-tracker-explanations.jsonl"
-CHANGE_ID="$1"
-FILE_PATH="$2"
-OLD_TEXT="$3"
-NEW_TEXT="$4"
-CHANGE_TYPE="$5"
+CHANGE_FILE="$1"
 
-# Build a concise diff summary for Claude
-if [ "$CHANGE_TYPE" = "create" ]; then
-  DIFF_SUMMARY="New file created with content:
-$NEW_TEXT"
-else
-  DIFF_SUMMARY="File: $FILE_PATH
-Changed from:
-$OLD_TEXT
-To:
-$NEW_TEXT"
+if [ ! -f "$CHANGE_FILE" ]; then
+  exit 0
 fi
 
-# Truncate if too long (keep under 2000 chars for speed)
-DIFF_SUMMARY=$(echo "$DIFF_SUMMARY" | head -c 2000)
+# Extract fields from the JSON change file
+CHANGE_ID=$(python3 -c "import json; print(json.load(open('$CHANGE_FILE'))['id'])" 2>/dev/null)
+FILE_PATH=$(python3 -c "import json; print(json.load(open('$CHANGE_FILE'))['file'])" 2>/dev/null)
+CHANGE_TYPE=$(python3 -c "import json; print(json.load(open('$CHANGE_FILE')).get('type','edit'))" 2>/dev/null)
 
-# Call Claude in print mode to generate the explanation
+if [ -z "$CHANGE_ID" ]; then
+  exit 0
+fi
+
+# Build a concise diff summary for Claude
+DIFF_SUMMARY=$(python3 -c "
+import json
+d = json.load(open('$CHANGE_FILE'))
+ct = d.get('type', 'edit')
+old = d.get('old_text', '')
+new = d.get('new_text', '')
+if ct == 'create':
+    print(f'New file created with content:\n{new}')
+else:
+    print(f'File: {d[\"file\"]}\nChanged from:\n{old}\nTo:\n{new}')
+" 2>/dev/null | head -c 2000)
+
 EXPLANATION=$(claude -p "You are a commit message assistant. Given this code change, write a single concise sentence describing WHAT was changed, WHY it matters, and HOW it was done. Be specific — reference actual variable names, function names, or values from the diff. Do NOT be generic. Do NOT mention file paths. Output ONLY the sentence, nothing else.
 
 $DIFF_SUMMARY" 2>/dev/null | head -1)
 
-# Write to explanations file as JSONL
 if [ -n "$EXPLANATION" ]; then
   python3 -c "
 import json, sys

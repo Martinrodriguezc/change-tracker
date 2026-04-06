@@ -38,6 +38,30 @@ def run_git(repo: str, *args) -> str:
     return result.stdout
 
 
+def _detect_type(old_lines: list, new_lines: list) -> str:
+    """Detect if this is a create, delete, or edit."""
+    if not old_lines or all(line == "" for line in old_lines):
+        return "create"
+    if not new_lines or all(line == "" for line in new_lines):
+        return "delete"
+    return "edit"
+
+
+def _flush_hunk(changes: list, file: str, old_lines: list, new_lines: list) -> None:
+    """Append a change entry from accumulated hunk lines, if any content exists."""
+    if not file or (not old_lines and not new_lines):
+        return
+    changes.append({
+        "id": len(changes) + 1,
+        "file": file,
+        "type": _detect_type(old_lines, new_lines),
+        "old_text": "\n".join(old_lines),
+        "new_text": "\n".join(new_lines),
+        "reason": "",
+        "category": "refactor",
+    })
+
+
 def parse_unified_diff(diff_output: str) -> list:
     """Parse unified diff output into structured change entries."""
     changes = []
@@ -45,121 +69,49 @@ def parse_unified_diff(diff_output: str) -> list:
     current_old_lines = []
     current_new_lines = []
     in_hunk = False
-    change_id = 0
 
-    lines = diff_output.split("\n")
-    i = 0
-
-    while i < len(lines):
-        line = lines[i]
-
-        # New file diff header
+    for line in diff_output.split("\n"):
         if line.startswith("diff --git"):
-            # Flush previous hunk
-            if current_file and (current_old_lines or current_new_lines):
-                change_id += 1
-                changes.append({
-                    "id": change_id,
-                    "file": current_file,
-                    "type": _detect_type(current_old_lines, current_new_lines),
-                    "old_text": "\n".join(current_old_lines),
-                    "new_text": "\n".join(current_new_lines),
-                    "reason": "",
-                    "category": "refactor",
-                })
-                current_old_lines = []
-                current_new_lines = []
+            _flush_hunk(changes, current_file, current_old_lines, current_new_lines)
+            current_old_lines = []
+            current_new_lines = []
 
-            # Extract file path from "diff --git a/path b/path"
             match = re.match(r"diff --git a/(.*) b/(.*)", line)
             if match:
                 current_file = match.group(2)
             in_hunk = False
-            i += 1
             continue
 
-        # New file mode
-        if line.startswith("new file mode"):
-            i += 1
+        if line.startswith(("new file mode", "deleted file mode", "---", "+++")):
             continue
 
-        # Deleted file mode
-        if line.startswith("deleted file mode"):
-            i += 1
-            continue
-
-        # --- and +++ headers
-        if line.startswith("---") or line.startswith("+++"):
-            i += 1
-            continue
-
-        # Hunk header
         if line.startswith("@@"):
-            # If we had a previous hunk for the same file, flush it as a separate change
-            if in_hunk and (current_old_lines or current_new_lines):
-                change_id += 1
-                changes.append({
-                    "id": change_id,
-                    "file": current_file,
-                    "type": _detect_type(current_old_lines, current_new_lines),
-                    "old_text": "\n".join(current_old_lines),
-                    "new_text": "\n".join(current_new_lines),
-                    "reason": "",
-                    "category": "refactor",
-                })
+            if in_hunk:
+                _flush_hunk(changes, current_file, current_old_lines, current_new_lines)
                 current_old_lines = []
                 current_new_lines = []
-
             in_hunk = True
-            i += 1
             continue
 
-        # Diff content lines
         if in_hunk:
             if line.startswith("-"):
                 current_old_lines.append(line[1:])
             elif line.startswith("+"):
                 current_new_lines.append(line[1:])
             elif line.startswith(" "):
-                # Context line — include in both
                 current_old_lines.append(line[1:])
                 current_new_lines.append(line[1:])
-            # Skip "\ No newline at end of file"
 
-        i += 1
-
-    # Flush last change
-    if current_file and (current_old_lines or current_new_lines):
-        change_id += 1
-        changes.append({
-            "id": change_id,
-            "file": current_file,
-            "type": _detect_type(current_old_lines, current_new_lines),
-            "old_text": "\n".join(current_old_lines),
-            "new_text": "\n".join(current_new_lines),
-            "reason": "",
-            "category": "refactor",
-        })
-
+    _flush_hunk(changes, current_file, current_old_lines, current_new_lines)
     return changes
 
 
-def _detect_type(old_lines: list, new_lines: list) -> str:
-    """Detect if this is a create, edit, or rewrite."""
-    if not old_lines or all(l == "" for l in old_lines):
-        return "create"
-    if not new_lines or all(l == "" for l in new_lines):
-        return "edit"
-    return "edit"
-
-
-def make_paths_absolute(changes: list, repo: str) -> list:
-    """Convert relative file paths to absolute."""
+def make_paths_absolute(changes: list, repo: str) -> None:
+    """Convert relative file paths to absolute (mutates in place)."""
     repo_path = Path(repo).resolve()
     for change in changes:
         if not change["file"].startswith("/"):
             change["file"] = str(repo_path / change["file"])
-    return changes
 
 
 def main():
@@ -181,10 +133,7 @@ def main():
         # Unstaged + staged changes (working tree vs HEAD)
         diff_output = run_git(repo, "diff", "HEAD", "-U2")
         if not diff_output.strip():
-            # Maybe everything is staged but not committed, try against last commit
-            diff_output = run_git(repo, "diff", "--cached", "-U2")
-        if not diff_output.strip():
-            # Try last commit's changes
+            # No working tree changes — fall back to last commit's changes
             diff_output = run_git(repo, "diff", "HEAD~1..HEAD", "-U2")
 
     if not diff_output.strip():
@@ -192,7 +141,7 @@ def main():
         sys.exit(1)
 
     changes = parse_unified_diff(diff_output)
-    changes = make_paths_absolute(changes, repo)
+    make_paths_absolute(changes, repo)
 
     # Get commit message for task description if available
     task = run_git(repo, "log", "--oneline", "-1", "--format=%s").strip()
