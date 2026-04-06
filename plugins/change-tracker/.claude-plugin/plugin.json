@@ -1,11 +1,35 @@
 {
   "name": "change-tracker",
   "description": "Automatically tracks all code changes during Claude Code sessions into a visual HTML changelog with colored diffs and detailed explanations. Works proactively (from task start) or retroactively (after changes were made).",
+  "version": "1.1.0",
   "author": {
     "name": "Martin Rodriguez",
-    "url": "https://github.com/Martinrodriguezc"
+    "email": "martinrodriguezc@outlook.com"
   },
+  "homepage": "https://github.com/Martinrodriguezc/change-tracker",
+  "repository": "https://github.com/Martinrodriguezc/change-tracker",
+  "license": "MIT",
+  "keywords": [
+    "change-tracker",
+    "changelog",
+    "diff",
+    "code-review",
+    "visual-diff",
+    "session-tracking"
+  ],
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/skills/change-tracker/scripts/hook-pre-capture.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",

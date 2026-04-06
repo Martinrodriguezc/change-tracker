@@ -1,0 +1,20 @@
+{
+  "name": "change-tracker-marketplace",
+  "description": "Marketplace for the Change Tracker plugin — automatic code change tracking with visual HTML changelogs for Claude Code sessions",
+  "owner": {
+    "name": "Martin Rodriguez",
+    "email": "martinrodriguezc@outlook.com"
+  },
+  "plugins": [
+    {
+      "name": "change-tracker",
+      "description": "Automatically tracks all code changes during Claude Code sessions into a visual HTML changelog with colored diffs and detailed explanations.",
+      "version": "1.1.0",
+      "source": "./plugins/change-tracker",
+      "author": {
+        "name": "Martin Rodriguez",
+        "email": "martinrodriguezc@outlook.com"
+      }
+    }
+  ]
+}

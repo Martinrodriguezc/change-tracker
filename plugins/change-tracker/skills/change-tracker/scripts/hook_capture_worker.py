@@ -7,10 +7,13 @@ Called by hook-capture.sh with:
 Appends one JSON line per Edit/Write to the JSONL changelog.
 Always active — no initialization needed.
 """
+import hashlib
 import json
 import sys
 from datetime import datetime
 from pathlib import Path
+
+PRE_CAPTURE_DIR = Path("/tmp/claude-change-tracker-pre")
 
 
 def main():
@@ -38,9 +41,24 @@ def main():
         new_text = tool_input.get("new_string", "")
         change_type = "edit"
     elif tool_name == "Write":
-        old_text = ""
         new_text = tool_input.get("content", "")
-        change_type = "create" if not Path(file_path).exists() else "rewrite"
+
+        # Try to recover old content from PreToolUse capture
+        old_text = ""
+        path_hash = hashlib.md5(file_path.encode()).hexdigest()
+        pre_file = PRE_CAPTURE_DIR / f"{path_hash}.txt"
+        if pre_file.exists():
+            try:
+                old_text = pre_file.read_text(encoding="utf-8")
+            except Exception:
+                pass
+            # Clean up pre-capture file
+            try:
+                pre_file.unlink()
+            except Exception:
+                pass
+
+        change_type = "create" if not old_text else "rewrite"
     else:
         sys.exit(0)
 
