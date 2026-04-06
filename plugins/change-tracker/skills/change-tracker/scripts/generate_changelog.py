@@ -244,12 +244,55 @@ def build_embedded_data(changelog: dict) -> dict:
     }
 
 
-def generate_html(changelog: dict) -> str:
+LIVE_META = '<meta http-equiv="refresh" content="3">'
+
+LIVE_SCRIPT = r"""
+// ── Live Mode: preserve UI state across auto-refreshes ──
+window.addEventListener('beforeunload', () => {
+  sessionStorage.setItem('ct-scroll', window.scrollY);
+  const searchEl = document.getElementById('searchInput');
+  if (searchEl) sessionStorage.setItem('ct-search', searchEl.value);
+  sessionStorage.setItem('ct-filters', JSON.stringify([...activeCategories]));
+  sessionStorage.setItem('ct-active-file', activeFile || '');
+  sessionStorage.setItem('ct-focused-card', focusedCardIndex);
+});
+(function restoreState() {
+  const scroll = sessionStorage.getItem('ct-scroll');
+  const search = sessionStorage.getItem('ct-search');
+  const filters = sessionStorage.getItem('ct-filters');
+  const file = sessionStorage.getItem('ct-active-file');
+  const focused = sessionStorage.getItem('ct-focused-card');
+
+  if (search) {
+    const el = document.getElementById('searchInput');
+    if (el) { el.value = search; searchQuery = search.toLowerCase(); }
+  }
+  if (filters) {
+    try { activeCategories = new Set(JSON.parse(filters)); } catch(e) {}
+  }
+  if (file) { activeFile = file || null; }
+  if (focused) { focusedCardIndex = parseInt(focused) || -1; }
+
+  // Re-render with restored state
+  renderFileList();
+  renderCategoryFilters();
+  renderChanges();
+
+  if (scroll) { requestAnimationFrame(() => window.scrollTo(0, parseInt(scroll))); }
+  if (focusedCardIndex >= 0) { updateCardFocus(); }
+})();
+"""
+
+
+def generate_html(changelog: dict, live: bool = False) -> str:
     """Build the complete standalone HTML string."""
     data = build_embedded_data(changelog)
     data_json = json.dumps(data, ensure_ascii=False, indent=2)
 
-    return HTML_TEMPLATE.replace("/*__CHANGELOG_DATA__*/", f"const CHANGELOG_DATA = {data_json};")
+    html = HTML_TEMPLATE.replace("/*__CHANGELOG_DATA__*/", f"const CHANGELOG_DATA = {data_json};")
+    html = html.replace("/*__LIVE_META__*/", LIVE_META if live else "")
+    html = html.replace("/*__LIVE_SCRIPT__*/", LIVE_SCRIPT if live else "")
+    return html
 
 
 HTML_TEMPLATE = r'''<!DOCTYPE html>
@@ -257,6 +300,7 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+/*__LIVE_META__*/
 <title>Change Tracker — Changelog Visual</title>
 <style>
   :root {
@@ -485,6 +529,82 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
   .category-badge.test { background: rgba(200,122,42,0.1); color: var(--orange); border: 1px solid rgba(200,122,42,0.3); }
   .category-badge.other { background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
 
+  /* PR Description section */
+  .pr-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 20px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .pr-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .pr-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .pr-header h3 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0;
+  }
+  .pr-header .pr-icon {
+    font-size: 16px;
+    opacity: 0.6;
+  }
+  .pr-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .pr-tab {
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .pr-tab:hover { color: var(--text); }
+  .pr-tab.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+  .pr-content {
+    padding: 16px 18px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    color: var(--text);
+    max-height: 300px;
+    overflow-y: auto;
+  }
+  .pr-copy-btn {
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--surface-hover);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .pr-copy-btn:hover { background: var(--border); color: var(--text); }
+  .pr-copy-btn.copied { background: var(--green-bg); color: var(--green); border-color: var(--green-border); }
+
   /* Main content */
   .main {
     flex: 1;
@@ -711,7 +831,10 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
     <div class="file-list" id="fileList"></div>
   </div>
 
-  <div class="main" id="mainContent"></div>
+  <div class="main" id="mainScroll">
+    <div class="pr-section" id="prSection"></div>
+    <div id="mainContent"></div>
+  </div>
 </div>
 
 <script>
@@ -1111,10 +1234,153 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
+// ── PR / Commit Description Generator ──
+function generateDescriptions() {
+  const changes = CHANGELOG_DATA.changes;
+  if (!changes.length) return;
+
+  const files = [...new Set(changes.map(c => c.file))];
+  const prefix = computePrefix(files);
+  const cats = {};
+  changes.forEach(c => {
+    const cat = c.category || 'other';
+    cats[cat] = (cats[cat] || 0) + 1;
+  });
+  const catSummary = Object.entries(cats).map(([k,v]) => k + '(' + v + ')').join(', ');
+
+  // Group changes by file for commit message
+  const byFile = {};
+  changes.forEach(c => {
+    const short = c.file.slice(prefix.length) || c.file;
+    if (!byFile[short]) byFile[short] = [];
+    byFile[short].push(c);
+  });
+
+  // Detect primary category for commit prefix
+  const topCat = Object.entries(cats).sort((a,b) => b[1]-a[1])[0][0];
+  const commitPrefix = {fix:'fix',feature:'feat',refactor:'refactor',style:'style',docs:'docs',test:'test',other:'chore'}[topCat] || 'chore';
+
+  // Commit message
+  const commitLines = [commitPrefix + ': ' + (CHANGELOG_DATA.task || 'update ' + files.length + ' files'), ''];
+  Object.entries(byFile).forEach(([file, edits]) => {
+    const reasons = edits.map(e => e.reason).filter(Boolean);
+    if (reasons.length) {
+      commitLines.push('- ' + file + ': ' + reasons[0].split('. ')[0]);
+    } else {
+      commitLines.push('- ' + file + ' (' + edits.length + ' edit' + (edits.length > 1 ? 's' : '') + ')');
+    }
+  });
+
+  // PR description
+  const prLines = [];
+  prLines.push('## Summary\n');
+  prLines.push('**' + files.length + ' files changed** | ' + changes.length + ' edits | ' + catSummary + '\n');
+  prLines.push('\n## Changes\n');
+  changes.forEach(c => {
+    const short = c.display_file || c.file.slice(prefix.length) || c.file;
+    const cat = (c.category || 'other').toUpperCase();
+    let line = '- **`' + short + '`** [' + cat + ']';
+    if (c.reason) line += ' — ' + c.reason.split('. ')[0];
+    prLines.push(line);
+  });
+
+  const allCons = changes.flatMap(c => c.cons || []);
+  if (allCons.length) {
+    prLines.push('\n## Trade-offs\n');
+    allCons.forEach(con => prLines.push('- ' + con));
+  }
+
+  const allNotes = changes.map(c => (c.notes || '').trim()).filter(Boolean);
+  if (allNotes.length) {
+    prLines.push('\n## Notes\n');
+    allNotes.forEach(n => prLines.push('- ' + n));
+  }
+  prLines.push('\n## Test plan\n');
+  prLines.push('- [ ] Verify all changes work as described');
+
+  return { commit: commitLines.join('\n'), pr: prLines.join('\n') };
+}
+
+function computePrefix(paths) {
+  if (!paths.length) return '';
+  const parts = paths.map(p => p.split('/'));
+  const prefix = [];
+  for (let i = 0; i < parts[0].length; i++) {
+    const seg = parts[0][i];
+    if (parts.every(p => p[i] === seg)) prefix.push(seg);
+    else break;
+  }
+  const r = prefix.join('/');
+  return r ? r + '/' : '';
+}
+
+function renderPrSection() {
+  const section = document.getElementById('prSection');
+  const desc = generateDescriptions();
+  if (!desc) { section.style.display = 'none'; return; }
+
+  const tabs = { commit: desc.commit, pr: desc.pr };
+  let activeTab = sessionStorage.getItem('ct-pr-tab') || 'commit';
+
+  section.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'pr-header';
+  const headerLeft = document.createElement('div');
+  headerLeft.className = 'pr-header-left';
+  headerLeft.innerHTML = '<span class="pr-icon">\u{1F4CB}</span><h3>Commit / PR Description</h3>';
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'pr-copy-btn';
+  copyBtn.textContent = 'Copiar';
+  header.appendChild(headerLeft);
+  header.appendChild(copyBtn);
+  section.appendChild(header);
+
+  const tabBar = document.createElement('div');
+  tabBar.className = 'pr-tabs';
+  const commitTab = document.createElement('button');
+  commitTab.className = 'pr-tab' + (activeTab === 'commit' ? ' active' : '');
+  commitTab.textContent = 'Commit message';
+  const prTab = document.createElement('button');
+  prTab.className = 'pr-tab' + (activeTab === 'pr' ? ' active' : '');
+  prTab.textContent = 'PR description';
+  tabBar.appendChild(commitTab);
+  tabBar.appendChild(prTab);
+  section.appendChild(tabBar);
+
+  const content = document.createElement('div');
+  content.className = 'pr-content';
+  content.textContent = tabs[activeTab];
+  section.appendChild(content);
+
+  function switchTab(tab) {
+    activeTab = tab;
+    sessionStorage.setItem('ct-pr-tab', tab);
+    commitTab.className = 'pr-tab' + (tab === 'commit' ? ' active' : '');
+    prTab.className = 'pr-tab' + (tab === 'pr' ? ' active' : '');
+    content.textContent = tabs[tab];
+    copyBtn.textContent = 'Copiar';
+    copyBtn.className = 'pr-copy-btn';
+  }
+  commitTab.addEventListener('click', () => switchTab('commit'));
+  prTab.addEventListener('click', () => switchTab('pr'));
+
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(tabs[activeTab]).then(() => {
+      copyBtn.textContent = '\u2713 Copiado';
+      copyBtn.className = 'pr-copy-btn copied';
+      setTimeout(() => { copyBtn.textContent = 'Copiar'; copyBtn.className = 'pr-copy-btn'; }, 2000);
+    });
+  });
+}
+
 // Initial render
+renderPrSection();
 renderFileList();
 renderCategoryFilters();
 renderChanges();
+
+/*__LIVE_SCRIPT__*/
 </script>
 </body>
 </html>
@@ -1165,6 +1431,7 @@ def main():
                         help="Path to changelog JSON/JSONL file (default: /tmp/claude-change-tracker.jsonl)")
     parser.add_argument("--output", "-o", type=Path, default=None, help="Output HTML path")
     parser.add_argument("--no-open", action="store_true", help="Don't open in browser")
+    parser.add_argument("--live", action="store_true", help="Live mode: fixed path + auto-refresh HTML")
     parser.add_argument("--task", "-t", type=str, default=None, help="Override task description")
     args = parser.parse_args()
 
@@ -1175,9 +1442,12 @@ def main():
     data = load_changelog(args.changelog)
     if args.task:
         data["task"] = args.task
-    html_content = generate_html(data)
+    html_content = generate_html(data, live=args.live)
 
-    output = args.output or Path(f"/tmp/claude-changelog-{datetime.now().strftime('%Y%m%d-%H%M%S')}.html")
+    if args.live:
+        output = args.output or Path("/tmp/claude-changelog-live.html")
+    else:
+        output = args.output or Path(f"/tmp/claude-changelog-{datetime.now().strftime('%Y%m%d-%H%M%S')}.html")
     output.write_text(html_content, encoding="utf-8")
 
     print(f"Changelog generado: {output}")

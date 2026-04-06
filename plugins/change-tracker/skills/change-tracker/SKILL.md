@@ -1,21 +1,32 @@
 ---
 name: change-tracker
 description: >-
-  Generates a visual HTML changelog of all code changes made during the current session.
-  The plugin's hook automatically captures every Edit/Write call — this skill only needs
-  to be invoked to generate the report. Use when the user asks to "show changes",
-  "generate changelog", "what did you change", "review changes", "show me a diff report",
-  or at the end of any multi-file editing task. Also use retroactively to review changes
-  from git history.
+  Tracks all code changes during Claude Code sessions and displays them in a live
+  HTML changelog with colored diffs. The report opens automatically on the first
+  Edit/Write and updates in real-time — no manual invocation needed. Invoke this
+  skill to enrich the live report with explanations, or to generate a retroactive
+  report from git history.
 ---
 
 # Change Tracker
 
-Every Edit and Write you make is automatically captured by a PostToolUse hook into `/tmp/claude-change-tracker.jsonl`. You do NOT need to log anything manually — it happens in the background.
+Every Edit and Write you make is automatically captured by hooks into `/tmp/claude-change-tracker.jsonl`. The live HTML report opens automatically in the browser on the first change and auto-refreshes every 3 seconds.
 
-This skill generates the visual HTML report from those captured changes. Invoke it when the user asks to see what changed, or at the end of a task.
+You do NOT need to invoke this skill for the live report — it works automatically. Invoke it only when the user asks to enrich the report with explanations, generate a retroactive report from git, or create a PR description.
 
-## Generating the report
+## Live Mode (automatic)
+
+The plugin hooks handle everything:
+1. **PreToolUse** saves the current file content before `Write` overwrites it
+2. **PostToolUse** captures the change and regenerates the HTML in background
+3. Browser opens automatically on the first change
+4. HTML auto-refreshes every 3 seconds, preserving scroll position, search, and filters
+
+The live report is always at: `/tmp/claude-changelog-live.html`
+
+## Enriching with explanations
+
+When the user asks for a detailed report, read the captured changes and add explanations:
 
 ### Step 1 — Find the scripts
 
@@ -69,13 +80,7 @@ EOF
 python3 "$CHANGE_TRACKER_DIR/generate_changelog.py" /tmp/claude-changelog-final.json --task "<TASK DESCRIPTION>"
 ```
 
-Or generate directly from the raw JSONL (without explanations):
-
-```bash
-python3 "$CHANGE_TRACKER_DIR/generate_changelog.py" --task "<TASK DESCRIPTION>"
-```
-
-This opens the HTML report in the browser automatically.
+This opens a separate HTML report (not the live one) with full explanations.
 
 ## Retroactive mode (from git)
 
@@ -115,3 +120,4 @@ Use `pros`/`cons` when there are real trade-offs. Use `notes` for follow-up sugg
 - **Paths:** common prefix stripped automatically, full path on hover
 - **Timestamps:** each change shows capture time, hover for full ISO
 - **Char-level diffs:** exact changed characters highlighted within lines
+- **Live refresh:** auto-refreshes every 3s preserving scroll, search, and filter state
