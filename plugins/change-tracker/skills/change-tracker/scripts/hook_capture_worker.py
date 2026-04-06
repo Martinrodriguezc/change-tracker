@@ -5,7 +5,7 @@ Called by hook-capture.sh with:
     python3 hook_capture_worker.py <changelog_jsonl_path> <input_json_file>
 
 Appends one JSON line per Edit/Write to the JSONL changelog.
-Always active — no initialization needed.
+Returns the change ID and data via a temp file for the explanation generator.
 """
 import hashlib
 import json
@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 PRE_CAPTURE_DIR = Path("/tmp/claude-change-tracker-pre")
+CHANGE_DATA_FILE = Path("/tmp/claude-change-tracker-last-change.json")
 
 
 def main():
@@ -52,7 +53,6 @@ def main():
                 old_text = pre_file.read_text(encoding="utf-8")
             except Exception:
                 pass
-            # Clean up pre-capture file
             try:
                 pre_file.unlink()
             except Exception:
@@ -61,6 +61,15 @@ def main():
         change_type = "create" if not old_text else "rewrite"
     else:
         sys.exit(0)
+
+    # Count existing entries to determine the change ID
+    change_id = 1
+    changelog = Path(changelog_path)
+    if changelog.exists():
+        try:
+            change_id = sum(1 for _ in changelog.open()) + 1
+        except Exception:
+            pass
 
     change = {
         "file": file_path,
@@ -73,6 +82,16 @@ def main():
     # Append one line (JSONL format — atomic, no read-modify-write)
     with open(changelog_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(change, ensure_ascii=False) + "\n")
+
+    # Write last change data for the explanation generator
+    last_change = {
+        "id": change_id,
+        "file": file_path,
+        "type": change_type,
+        "old_text": old_text[:1000],  # truncate for API prompt
+        "new_text": new_text[:1000],
+    }
+    CHANGE_DATA_FILE.write_text(json.dumps(last_change, ensure_ascii=False), encoding="utf-8")
 
 
 if __name__ == "__main__":

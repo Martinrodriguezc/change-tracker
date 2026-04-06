@@ -1235,68 +1235,243 @@ document.getElementById('exportBtn').addEventListener('click', () => {
 });
 
 // ── PR / Commit Description Generator ──
+
+// Classify a line of code by its semantic type
+function classifyLine(line) {
+  const t = line.trim();
+  if (!t) return null;
+  if (/^\/\/|^\/\*|^\*|^#/.test(t)) return 'comment';
+  if (/^import\s|^from\s.*import|^require\(|^export\s/.test(t)) return 'import';
+  if (/^(export\s+)?(function|const|let|var|class|interface|type|enum)\s/.test(t)) return 'declaration';
+  if (/^(async\s+)?function\s|=>\s*\{/.test(t)) return 'function';
+  if (/className=|style=|css|tailwind|bg-|text-|flex|grid|rounded|border|shadow|padding|margin/i.test(t)) return 'styling';
+  if (/useState|useEffect|useRef|useMemo|useCallback|useContext|useQuery|useMutation/.test(t)) return 'hook';
+  if (/\.test\(|\.spec\(|describe\(|it\(|expect\(|assert/.test(t)) return 'test';
+  if (/router\.|route|path:|redirect|navigate|middleware|endpoint/i.test(t)) return 'routing';
+  if (/catch\(|throw\s|Error\(|reject\(|\.error|console\.error/.test(t)) return 'error-handling';
+  if (/config|\.env|setting|option|flag|toggle|enable|disable/i.test(t)) return 'config';
+  if (/prisma|query|where:|select:|include:|findMany|findUnique|create\(|update\(|delete\(/.test(t)) return 'database';
+  if (/fetch\(|axios|\.get\(|\.post\(|\.put\(|\.delete\(|api|endpoint/i.test(t)) return 'api';
+  if (/return\s|return\(/.test(t)) return 'return';
+  return 'logic';
+}
+
+// Get human-readable area from file path
+function describeArea(filePath) {
+  const p = filePath.toLowerCase();
+  if (p.includes('/components/')) return 'UI component';
+  if (p.includes('/pages/') || p.includes('/views/')) return 'page';
+  if (p.includes('/hooks/')) return 'custom hook';
+  if (p.includes('/services/')) return 'service layer';
+  if (p.includes('/routers/') || p.includes('/routes/')) return 'API route';
+  if (p.includes('/controllers/')) return 'controller';
+  if (p.includes('/middleware/')) return 'middleware';
+  if (p.includes('/validators/')) return 'validator';
+  if (p.includes('/utils/') || p.includes('/helpers/')) return 'utility';
+  if (p.includes('/types/') || p.includes('.d.ts')) return 'type definition';
+  if (p.includes('/styles/') || p.endsWith('.css')) return 'stylesheet';
+  if (p.includes('/config/') || p.includes('.config.')) return 'configuration';
+  if (p.includes('prisma')) return 'database schema';
+  if (p.includes('test') || p.includes('spec')) return 'test';
+  if (p.includes('.json')) return 'config file';
+  if (p.includes('.md')) return 'documentation';
+  if (p.includes('.sh')) return 'shell script';
+  if (p.includes('.py')) return 'Python script';
+  return 'source file';
+}
+
+// Analyze all diffs for a file and produce a semantic summary
+function analyzeFile(file, edits) {
+  const types = {};
+  let totalAdded = 0, totalRemoved = 0;
+
+  edits.forEach(e => {
+    const dl = e.diff_lines || [];
+    dl.forEach(l => {
+      if (l.type === 'add') {
+        totalAdded++;
+        const cls = classifyLine(l.text);
+        if (cls) types[cls] = (types[cls] || 0) + 1;
+      } else if (l.type === 'remove') {
+        totalRemoved++;
+      }
+    });
+  });
+
+  const isCreate = edits.some(e => e.type === 'create');
+  const isRewrite = edits.some(e => e.type === 'rewrite');
+  const area = describeArea(file);
+  const sorted = Object.entries(types).sort((a, b) => b[1] - a[1]);
+  const dominant = sorted[0] ? sorted[0][0] : 'logic';
+
+  // Build a natural description
+  const parts = [];
+
+  if (isCreate) {
+    parts.push('Created new ' + area + ' (' + totalAdded + ' lines)');
+  } else if (isRewrite) {
+    parts.push('Rewrote ' + area + ' (' + totalAdded + ' lines added, ' + totalRemoved + ' removed)');
+  } else {
+    // Describe by dominant change type
+    const actions = [];
+    if (types['comment']) actions.push('updated comments/documentation');
+    if (types['import']) actions.push('modified imports');
+    if (types['declaration'] || types['function']) actions.push('changed function/variable declarations');
+    if (types['styling']) actions.push('updated styling/layout');
+    if (types['hook']) actions.push('modified React hooks');
+    if (types['routing']) actions.push('updated routing');
+    if (types['config']) actions.push('changed configuration');
+    if (types['database']) actions.push('modified database queries');
+    if (types['api']) actions.push('updated API calls');
+    if (types['error-handling']) actions.push('improved error handling');
+    if (types['test']) actions.push('updated tests');
+    if (types['logic'] && !actions.length) actions.push('updated business logic');
+
+    if (actions.length) {
+      parts.push(actions.slice(0, 3).join(', ') + ' in ' + area);
+    } else {
+      parts.push('edited ' + area + ' (' + edits.length + ' change' + (edits.length > 1 ? 's' : '') + ')');
+    }
+
+    if (totalAdded + totalRemoved > 0) {
+      parts.push('+' + totalAdded + '/-' + totalRemoved + ' lines');
+    }
+  }
+
+  return { description: parts[0], stats: parts[1] || '', dominant, isCreate, isRewrite, totalAdded, totalRemoved };
+}
+
 function generateDescriptions() {
   const changes = CHANGELOG_DATA.changes;
   if (!changes.length) return;
 
   const files = [...new Set(changes.map(c => c.file))];
   const prefix = computePrefix(files);
-  const cats = {};
-  changes.forEach(c => {
-    const cat = c.category || 'other';
-    cats[cat] = (cats[cat] || 0) + 1;
-  });
-  const catSummary = Object.entries(cats).map(([k,v]) => k + '(' + v + ')').join(', ');
 
-  // Group changes by file for commit message
+  // Group changes by file (using short path)
   const byFile = {};
   changes.forEach(c => {
     const short = c.file.slice(prefix.length) || c.file;
-    if (!byFile[short]) byFile[short] = [];
-    byFile[short].push(c);
+    if (!byFile[short]) byFile[short] = { edits: [], fullPath: c.file };
+    byFile[short].edits.push(c);
   });
 
-  // Detect primary category for commit prefix
-  const topCat = Object.entries(cats).sort((a,b) => b[1]-a[1])[0][0];
-  const commitPrefix = {fix:'fix',feature:'feat',refactor:'refactor',style:'style',docs:'docs',test:'test',other:'chore'}[topCat] || 'chore';
+  // Analyze each file
+  const analyses = {};
+  Object.entries(byFile).forEach(([file, data]) => {
+    analyses[file] = analyzeFile(data.fullPath, data.edits);
+  });
 
-  // Commit message
-  const commitLines = [commitPrefix + ': ' + (CHANGELOG_DATA.task || 'update ' + files.length + ' files'), ''];
-  Object.entries(byFile).forEach(([file, edits]) => {
-    const reasons = edits.map(e => e.reason).filter(Boolean);
-    if (reasons.length) {
-      commitLines.push('- ' + file + ': ' + reasons[0].split('. ')[0]);
+  // Detect overall intent
+  const allDominant = Object.values(analyses).map(a => a.dominant);
+  const hasNewFiles = Object.values(analyses).some(a => a.isCreate);
+  const hasRewrites = Object.values(analyses).some(a => a.isRewrite);
+  const dominantCounts = {};
+  allDominant.forEach(d => dominantCounts[d] = (dominantCounts[d] || 0) + 1);
+  const topDominant = Object.entries(dominantCounts).sort((a,b) => b[1]-a[1])[0][0];
+
+  // Choose commit prefix based on what actually changed
+  let commitPrefix = 'chore';
+  if (hasNewFiles) commitPrefix = 'feat';
+  else if (topDominant === 'styling') commitPrefix = 'style';
+  else if (topDominant === 'comment') commitPrefix = 'docs';
+  else if (topDominant === 'test') commitPrefix = 'test';
+  else if (topDominant === 'config') commitPrefix = 'chore';
+  else if (topDominant === 'error-handling') commitPrefix = 'fix';
+  else commitPrefix = 'feat';
+
+  const task = CHANGELOG_DATA.task || '';
+  const stats = CHANGELOG_DATA.stats || {};
+
+  // ── Commit message ──
+  const commitLines = [];
+
+  // Title
+  if (task && task !== 'Session changes') {
+    commitLines.push(commitPrefix + ': ' + task);
+  } else {
+    // Generate title from analyses
+    const summaries = Object.values(analyses).map(a => a.description);
+    if (summaries.length === 1) {
+      commitLines.push(commitPrefix + ': ' + summaries[0]);
     } else {
-      commitLines.push('- ' + file + ' (' + edits.length + ' edit' + (edits.length > 1 ? 's' : '') + ')');
+      // Find common theme
+      const areas = [...new Set(Object.entries(byFile).map(([_, d]) => describeArea(d.fullPath)))];
+      if (areas.length === 1) {
+        commitLines.push(commitPrefix + ': update ' + areas[0] + ' (' + files.length + ' files)');
+      } else {
+        commitLines.push(commitPrefix + ': update ' + areas.slice(0, 3).join(', '));
+      }
     }
+  }
+  commitLines.push('');
+
+  // Body: one line per file with semantic description
+  Object.entries(analyses).forEach(([file, analysis]) => {
+    const line = analysis.stats
+      ? '- ' + file + ': ' + analysis.description + ' (' + analysis.stats + ')'
+      : '- ' + file + ': ' + analysis.description;
+    commitLines.push(line);
   });
 
-  // PR description
+  // ── PR description ──
   const prLines = [];
-  prLines.push('## Summary\n');
-  prLines.push('**' + files.length + ' files changed** | ' + changes.length + ' edits | ' + catSummary + '\n');
-  prLines.push('\n## Changes\n');
-  changes.forEach(c => {
-    const short = c.display_file || c.file.slice(prefix.length) || c.file;
-    const cat = (c.category || 'other').toUpperCase();
-    let line = '- **`' + short + '`** [' + cat + ']';
-    if (c.reason) line += ' — ' + c.reason.split('. ')[0];
+
+  // What
+  prLines.push('## What');
+  prLines.push('');
+  if (task && task !== 'Session changes') {
+    prLines.push(task);
+  } else {
+    const summaries = Object.values(analyses).map(a => a.description);
+    prLines.push(summaries.join('. ') + '.');
+  }
+  prLines.push('');
+  prLines.push('**Scope:** ' + files.length + ' file(s) | +' + (stats.lines_added || 0) + '/-' + (stats.lines_removed || 0) + ' lines');
+  prLines.push('');
+
+  // Why (from reasons if available)
+  const allReasons = changes.map(c => c.reason).filter(Boolean);
+  if (allReasons.length) {
+    prLines.push('## Why');
+    prLines.push('');
+    [...new Set(allReasons)].forEach(r => prLines.push('- ' + r));
+    prLines.push('');
+  }
+
+  // How — semantic per-file breakdown
+  prLines.push('## Changes');
+  prLines.push('');
+  Object.entries(analyses).forEach(([file, analysis]) => {
+    let line = '- **' + file + '**: ' + analysis.description;
+    if (analysis.stats) line += ' (' + analysis.stats + ')';
     prLines.push(line);
   });
+  prLines.push('');
 
+  // Trade-offs
   const allCons = changes.flatMap(c => c.cons || []);
   if (allCons.length) {
-    prLines.push('\n## Trade-offs\n');
+    prLines.push('## Trade-offs');
+    prLines.push('');
     allCons.forEach(con => prLines.push('- ' + con));
+    prLines.push('');
   }
 
+  // Notes
   const allNotes = changes.map(c => (c.notes || '').trim()).filter(Boolean);
   if (allNotes.length) {
-    prLines.push('\n## Notes\n');
+    prLines.push('## Notes');
+    prLines.push('');
     allNotes.forEach(n => prLines.push('- ' + n));
+    prLines.push('');
   }
-  prLines.push('\n## Test plan\n');
-  prLines.push('- [ ] Verify all changes work as described');
+
+  // Test plan
+  prLines.push('## Test plan');
+  prLines.push('');
+  prLines.push('- [ ] Verify changes work as described');
+  prLines.push('- [ ] No regressions in affected areas');
 
   return { commit: commitLines.join('\n'), pr: prLines.join('\n') };
 }
@@ -1387,18 +1562,44 @@ renderChanges();
 '''
 
 
+EXPLANATIONS_FILE = Path("/tmp/claude-change-tracker-explanations.jsonl")
+
+
+def load_explanations() -> dict:
+    """Load Claude-generated explanations keyed by change ID."""
+    explanations = {}
+    if not EXPLANATIONS_FILE.exists():
+        return explanations
+    try:
+        for line in EXPLANATIONS_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                explanations[entry["id"]] = entry.get("explanation", "")
+            except (json.JSONDecodeError, KeyError):
+                continue
+    except Exception:
+        pass
+    return explanations
+
+
 def load_changelog(path: Path) -> dict:
     """Load changelog from JSON or JSONL format."""
     text = path.read_text(encoding="utf-8").strip()
 
-    # Try JSON first (legacy format — single JSON object, not multiple lines)
-    if text.startswith("{") and "\n" not in text.rstrip():
-        return json.loads(text)
+    # Try JSON first (legacy format — single JSON object with "changes" key)
     if text.startswith("{"):
         try:
-            return json.loads(text)
+            parsed = json.loads(text)
+            if isinstance(parsed, dict) and "changes" in parsed:
+                return parsed
         except json.JSONDecodeError:
             pass  # Fall through to JSONL parsing
+
+    # Load Claude-generated explanations
+    explanations = load_explanations()
 
     # JSONL format: one JSON object per line (from the hook)
     changes = []
@@ -1409,8 +1610,11 @@ def load_changelog(path: Path) -> dict:
         try:
             entry = json.loads(line)
             entry.setdefault("id", i)
+            # Use Claude-generated explanation if available
+            if i in explanations and not entry.get("reason"):
+                entry["reason"] = explanations[i]
             entry.setdefault("reason", "")
-            entry.setdefault("category", "")
+            entry.setdefault("category", "other")
             entry.setdefault("pros", [])
             entry.setdefault("cons", [])
             entry.setdefault("notes", "")
