@@ -219,7 +219,7 @@ def start_new_session(cwd: str = None):
         Path("/tmp/claude-change-tracker-summary.json"),
         Path("/tmp/claude-change-tracker-summary.lock"),
         Path("/tmp/claude-change-tracker-last-change.json"),
-        Path("/tmp/claude-changelog-opened"),
+        BASE_DIR / ".opened-session",
     ]:
         tmp_file.unlink(missing_ok=True)
 

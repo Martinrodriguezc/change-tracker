@@ -105,7 +105,7 @@ The skill activates automatically via hooks, but you can also invoke it by sayin
 - **Python 3.9+**
 - **Git** (only for retroactive mode)
 
-No npm, no pip, no external dependencies. Python stdlib only.
+No npm, no pip, no external dependencies. Python stdlib only. The SSE server starts automatically on the first change.
 
 ## Updating
 

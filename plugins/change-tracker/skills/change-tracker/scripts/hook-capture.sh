@@ -5,7 +5,7 @@
 # and launches Claude-powered explanation + summary in background.
 
 LIVE_HTML="/tmp/claude-changelog-live.html"
-OPENED_FLAG="/tmp/claude-changelog-opened"
+OPENED_FLAG="$HOME/.claude-change-tracker/.opened-session"
 LAST_CHANGE="/tmp/claude-change-tracker-last-change.json"
 
 INPUT_FILE=$(mktemp)
@@ -14,6 +14,7 @@ cat > "$INPUT_FILE"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # Capture the change (writes to ~/.claude-change-tracker/current-session.jsonl)
+# This also handles session rotation (archives old session if new Claude instance detected)
 python3 "$SCRIPT_DIR/hook_capture_worker.py" "$INPUT_FILE" >/dev/null 2>&1
 rm -f "$INPUT_FILE"
 
@@ -23,17 +24,19 @@ if [ -f "$CHANGELOG" ]; then
   python3 "$SCRIPT_DIR/generate_changelog.py" "$CHANGELOG" --live --no-open -o "$LIVE_HTML" >/dev/null 2>&1
 fi
 
-# Clear stale flag from previous sessions (older than 30 min)
+# Detect if this is the first change of the current session.
+# The flag stores the session token (CLAUDE_CODE_SSE_PORT or PPID).
+# If it differs from the current token, this is a new session.
+CURRENT_TOKEN="${CLAUDE_CODE_SSE_PORT:-$$}"
+STORED_TOKEN=""
 if [ -f "$OPENED_FLAG" ]; then
-  FLAG_AGE=$(( $(date +%s) - $(stat -f %m "$OPENED_FLAG" 2>/dev/null || stat -c %Y "$OPENED_FLAG" 2>/dev/null || echo 0) ))
-  if [ "$FLAG_AGE" -gt 1800 ]; then
-    rm -f "$OPENED_FLAG"
-  fi
+  STORED_TOKEN=$(cat "$OPENED_FLAG" 2>/dev/null)
 fi
 
-# Auto-start server + open browser on first change of the session
-if [ ! -f "$OPENED_FLAG" ]; then
-  touch "$OPENED_FLAG"
+if [ "$STORED_TOKEN" != "$CURRENT_TOKEN" ]; then
+  # New session — write token and auto-start
+  mkdir -p "$(dirname "$OPENED_FLAG")"
+  printf "%s" "$CURRENT_TOKEN" > "$OPENED_FLAG"
 
   # Start live SSE server if not already running
   SERVER_RUNNING=false
@@ -46,6 +49,7 @@ if [ ! -f "$OPENED_FLAG" ]; then
 
   if [ "$SERVER_RUNNING" = false ]; then
     python3 "$SCRIPT_DIR/serve_changelog.py" >/dev/null 2>&1
+    sleep 0.5
   fi
 
   # Open browser pointing to the live server

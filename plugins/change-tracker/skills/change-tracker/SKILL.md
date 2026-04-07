@@ -242,4 +242,5 @@ Use `pros`/`cons` when there are real trade-offs. Use `notes` for follow-up sugg
 - **Paths:** common prefix stripped automatically, full path on hover
 - **Timestamps:** each change shows capture time, hover for full ISO
 - **Char-level diffs:** exact changed characters highlighted within lines
+- **Auto-start server:** SSE server launches automatically on first change
 - **Dark/light mode:** toggleable, remembers your preference
