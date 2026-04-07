@@ -21,14 +21,19 @@ Every Edit and Write is automatically captured by a PostToolUse hook into `~/.cl
 
 This skill generates the visual HTML report, starts the live server, manages sessions, and generates commit messages and PR descriptions.
 
-## IMPORTANT — Automatic behavior (no skill invocation needed)
+## IMPORTANT — Fully automatic (DO NOT start the server manually)
 
-The hooks run automatically on every Edit/Write. The live HTML report at `/tmp/claude-changelog-live.html` auto-refreshes. The browser opens automatically on the first change of the session. **You do NOT need to invoke this skill for changes to be tracked.**
+The hooks run automatically on every Edit/Write. On the first change of each session, the hook:
+1. Rotates the session (archives previous session data)
+2. Starts the SSE server if not running
+3. Opens the browser to `http://localhost:8877`
 
-When the user asks to see changes ("muéstrame los cambios", "what changed", etc.) and the hooks are already capturing, just tell them:
-- The live changelog is already open in the browser (or tell them to check `/tmp/claude-changelog-live.html`)
-- If the live SSE server is running, point them to `http://localhost:8877` (or the active port)
-- Only invoke this skill's full flow if the user wants to START the live server, generate a STATIC report with explanations, or manage sessions
+**You do NOT need to run `serve_changelog.py` or open the browser manually.** Doing so would show stale data from the previous session before the hook has rotated it.
+
+When the user asks to see changes ("muéstrame los cambios", "what changed", etc.):
+- Tell them the live changelog is already open (or will open on the next Edit/Write)
+- Point them to `http://localhost:8877` if they closed the tab
+- Only invoke manual commands if the user explicitly asks to manage sessions or generate static reports
 
 ## First-time setup (one-time)
 
@@ -41,30 +46,13 @@ bash "$CHANGE_TRACKER_DIR/install.sh"
 
 This installs PostToolUse/PreToolUse hooks that auto-capture every Edit/Write. You only need to run this once.
 
-## Quick start — Live server (preferred)
-
-### Step 1 — Find the scripts
+## Finding the scripts (for manual operations only)
 
 ```bash
 CHANGE_TRACKER_DIR=$(find ~/.claude -path "*/change-tracker/scripts/serve_changelog.py" -exec dirname {} \; 2>/dev/null | head -1) && echo "$CHANGE_TRACKER_DIR"
 ```
 
-### Step 2 — Start the live server
-
-```bash
-python3 "$CHANGE_TRACKER_DIR/serve_changelog.py" --open
-```
-
-This starts a background HTTP server at `http://localhost:8877` (or next available port) that:
-- Serves the changelog HTML viewer
-- Uses Server-Sent Events (SSE) to push new changes to the browser in real-time
-- Shows a connection indicator (green = live, red = disconnected)
-- Auto-reconnects if the connection drops
-- Shows toast notifications when new changes arrive while the user has scrolled up
-
-The server runs in the background and does NOT block the terminal. Once started, every subsequent Edit/Write will appear in the browser automatically.
-
-### Step 3 — Stop the server when done
+## Stopping the server
 
 ```bash
 python3 "$CHANGE_TRACKER_DIR/serve_changelog.py" --stop

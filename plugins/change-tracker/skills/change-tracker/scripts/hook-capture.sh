@@ -13,6 +13,10 @@ cat > "$INPUT_FILE"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Export Claude Code's PID so session_manager can build a unique session token.
+# $PPID here is the Claude Code process that spawned this hook script.
+export CLAUDE_CODE_PID="$PPID"
+
 # Capture the change (writes to ~/.claude-change-tracker/current-session.jsonl)
 # This also handles session rotation (archives old session if new Claude instance detected)
 python3 "$SCRIPT_DIR/hook_capture_worker.py" "$INPUT_FILE" >/dev/null 2>&1
@@ -25,9 +29,10 @@ if [ -f "$CHANGELOG" ]; then
 fi
 
 # Detect if this is the first change of the current session.
-# The flag stores the session token (CLAUDE_CODE_SSE_PORT or PPID).
-# If it differs from the current token, this is a new session.
-CURRENT_TOKEN="${CLAUDE_CODE_SSE_PORT:-$$}"
+# The flag stores a composite token: SSE_PORT:CLAUDE_PID.
+# PPID here is Claude Code's PID (the process that spawned this hook).
+# Using both avoids false matches when the OS recycles the same SSE port.
+CURRENT_TOKEN="${CLAUDE_CODE_SSE_PORT:-unknown}:${PPID}"
 STORED_TOKEN=""
 if [ -f "$OPENED_FLAG" ]; then
   STORED_TOKEN=$(cat "$OPENED_FLAG" 2>/dev/null)

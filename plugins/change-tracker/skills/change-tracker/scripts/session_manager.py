@@ -176,10 +176,19 @@ def archive_current_session() -> str | None:
 def _get_session_token() -> str:
     """Get a stable identifier for the current Claude Code session.
 
-    Uses CLAUDE_CODE_SSE_PORT which is unique per Claude Code instance.
-    Falls back to PPID.
+    Combines CLAUDE_CODE_SSE_PORT with the Claude Code process PID to avoid
+    false matches when the OS recycles the same port for a new session.
+    CLAUDE_CODE_PID is exported by hook-capture.sh ($PPID of the hook = Claude Code).
     """
-    return os.environ.get("CLAUDE_CODE_SSE_PORT", "") or str(os.getppid())
+    sse_port = os.environ.get("CLAUDE_CODE_SSE_PORT", "")
+    cc_pid = os.environ.get("CLAUDE_CODE_PID", "")
+    if sse_port and cc_pid:
+        return f"{sse_port}:{cc_pid}"
+    if sse_port:
+        return sse_port
+    if cc_pid:
+        return cc_pid
+    return str(os.getppid())
 
 
 def is_new_session() -> bool:
@@ -219,9 +228,24 @@ def start_new_session(cwd: str = None):
         Path("/tmp/claude-change-tracker-summary.json"),
         Path("/tmp/claude-change-tracker-summary.lock"),
         Path("/tmp/claude-change-tracker-last-change.json"),
+        Path("/tmp/claude-changelog-opened"),  # legacy flag
         BASE_DIR / ".opened-session",
     ]:
         tmp_file.unlink(missing_ok=True)
+
+    # Clean up stale HTML reports and legacy files from /tmp
+    import glob as _glob
+    for pattern in [
+        "/tmp/claude-changelog-*.html",
+        "/tmp/claude-changelog-*.json",
+        "/tmp/claude-changes-*.json",
+        "/tmp/claude-change-tracker.jsonl",  # legacy pre-sessions JSONL
+    ]:
+        for stale in _glob.glob(pattern):
+            try:
+                Path(stale).unlink()
+            except OSError:
+                pass
 
     # Write fresh metadata
     cwd = cwd or os.getcwd()
