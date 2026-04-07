@@ -1,7 +1,7 @@
 {
   "name": "change-tracker",
   "description": "Automatically tracks all code changes during Claude Code sessions into a visual HTML changelog with colored diffs and detailed explanations. Works proactively (from task start) or retroactively (after changes were made).",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "author": {
     "name": "Martin Rodriguez",
     "email": "martinrodriguezc@outlook.com"
@@ -15,7 +15,10 @@
     "diff",
     "code-review",
     "visual-diff",
-    "session-tracking"
+    "session-tracking",
+    "live-reload",
+    "commit-message",
+    "pr-description"
   ],
   "hooks": {
     "PreToolUse": [

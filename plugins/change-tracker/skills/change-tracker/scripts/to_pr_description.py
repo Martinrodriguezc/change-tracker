@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Generate a GitHub PR description from a change-tracker changelog.
+"""Generate a GitHub PR description from change-tracker data.
 
 Usage:
-    python3 to_pr_description.py /tmp/claude-changes-XXX.json
-    python3 to_pr_description.py /tmp/claude-changes-XXX.json --copy
+    python3 to_pr_description.py                              # From current session
+    python3 to_pr_description.py /path/to/changelog.json      # From JSON
+    python3 to_pr_description.py /path/to/session.jsonl        # From JSONL
+    python3 to_pr_description.py --copy                       # Copy to clipboard
 
 Outputs markdown suitable for gh pr create --body.
 """
@@ -13,29 +15,31 @@ import sys
 from pathlib import Path
 from collections import Counter
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+from session_manager import CURRENT_SESSION
+from shared_utils import compute_common_prefix, load_changes_from_jsonl, copy_to_clipboard
 
-def compute_common_prefix(paths):
-    if not paths:
-        return ""
-    parts = [p.split("/") for p in paths]
-    prefix = []
-    for segments in zip(*parts):
-        if len(set(segments)) == 1:
-            prefix.append(segments[0])
-        else:
-            break
-    result = "/".join(prefix)
-    return result + "/" if result else ""
+
+def load_changes(source: Path) -> tuple:
+    """Load changes from JSONL or JSON, merging explanations. Returns (metadata, changes)."""
+    return load_changes_from_jsonl(source)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Generate PR description from changelog")
-    parser.add_argument("changelog", type=Path, help="Path to changelog JSON")
+    parser.add_argument("changelog", type=Path, nargs="?", default=None,
+                        help="Path to changelog JSON/JSONL (default: current session)")
     parser.add_argument("--copy", action="store_true", help="Copy to clipboard (macOS)")
+    parser.add_argument("--title", type=str, default=None, help="Override PR title")
     args = parser.parse_args()
 
-    data = json.loads(args.changelog.read_text(encoding="utf-8"))
-    changes = data.get("changes", [])
+    source = args.changelog or CURRENT_SESSION
+    if not source.exists():
+        print(f"No changes found at {source}", file=sys.stderr)
+        sys.exit(1)
+
+    meta, changes = load_changes(source)
 
     if not changes:
         print("No changes found.", file=sys.stderr)
@@ -50,7 +54,8 @@ def main():
 
     lines = []
     lines.append("## Summary\n")
-    lines.append(f"**Task:** {data.get('task', 'N/A')}\n")
+    task = meta.get("task", "N/A")
+    lines.append(f"**Task:** {task}\n")
     lines.append(f"**{files_changed} files changed** | {len(changes)} edits | Categories: {', '.join(f'{cat} ({n})' for cat, n in categories.most_common())}\n")
 
     lines.append("\n## Changes\n")
@@ -85,9 +90,10 @@ def main():
     print(output)
 
     if args.copy:
-        import subprocess
-        subprocess.run(["pbcopy"], input=output.encode(), check=True)
-        print("\n(Copied to clipboard)", file=sys.stderr)
+        if copy_to_clipboard(output):
+            print("\n(Copied to clipboard)", file=sys.stderr)
+        else:
+            print("\n(Could not copy to clipboard)", file=sys.stderr)
 
 
 if __name__ == "__main__":

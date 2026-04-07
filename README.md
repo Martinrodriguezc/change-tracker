@@ -1,195 +1,108 @@
 # Change Tracker for Claude Code
 
-A Claude Code plugin that automatically documents every code change made during a session and generates a visual HTML diff report you can review in your browser.
+A plugin that automatically tracks every code change Claude makes and shows them in a live browser dashboard with diffs, AI-generated explanations, commit messages, and PR descriptions.
 
 ![Light Mode](https://raw.githubusercontent.com/Martinrodriguezc/change-tracker/main/assets/screenshot-light.png)
 ![Dark Mode](https://raw.githubusercontent.com/Martinrodriguezc/change-tracker/main/assets/screenshot-dark.png)
 
-## The Problem
+## What it does
 
-When Claude Code edits multiple files during a task, it's hard to keep track of what changed, where, and why. You end up scrolling through the conversation trying to piece together what happened.
+Every time Claude edits or creates a file, Change Tracker:
 
-## The Solution
+1. **Captures the change** (old code, new code, file path, timestamp)
+2. **Generates an AI explanation** of what changed and why (via Claude Haiku)
+3. **Updates a live dashboard** in your browser via Server-Sent Events (SSE)
+4. **Generates a commit message** and **PR description** automatically
 
-Change Tracker records every edit as it happens — the old code, the new code, and a detailed explanation of why the change was made. At the end, it generates a standalone HTML page with:
-
-- **Colored unified diffs** — red for removed lines, green for added lines, with line numbers and 2 lines of context
-- **Detailed explanations** — each change includes context about what it does and why the new code is correct
-- **PROs and CONs** — trade-off analysis per change so you can evaluate decisions at a glance
-- **Notes and suggestions** — follow-up items, warnings, or additional context
-- **File sidebar** — navigate changes grouped by file with change counts
-- **Category filters** — filter by fix, feature, refactor, style, docs, or test
-- **Search** — find changes by file path or description text
-- **Dark/light mode** — toggleable, remembers your preference
-- **Retroactive mode** — works even if activated after changes were already made (extracts from `git diff`)
-- **Character-level diff highlighting** — within changed lines, the exact characters that differ are highlighted with a stronger background
-- **Per-change timestamps** — see when each edit was made during the session
-- **Auto-capture via hooks** — edits are recorded automatically via PostToolUse hook, no manual logging needed
-- **Keyboard navigation** — `j`/`k` to move between changes, `/` to search, `Escape` to clear
-- **Export to Markdown** — download the full changelog as a `.md` file
-- **PR description generator** — auto-generate a GitHub PR body from the changelog
-- **Relative file paths** — common prefix stripped for cleaner display, full path on hover
-- **Zero dependencies** — self-contained HTML file, works offline, Python stdlib only
+All of this happens in the background. You don't need to invoke anything.
 
 ## Installation
 
-### Option 1: Plugin Marketplace (Recommended)
-
 ```bash
-# 1. Add the marketplace (one-time setup)
+# Add the marketplace (one-time)
 claude plugin marketplace add https://github.com/Martinrodriguezc/change-tracker
 
-# 2. Install the plugin — choose one:
-
-# Global (available in all your projects)
+# Install globally
 claude plugin install change-tracker
 
-# Or project-only (only available in the current project)
+# Or project-only
 claude plugin install change-tracker --scope project
 ```
 
-**When to use which scope:**
-- `--scope project` — you only want change tracking in specific projects, keeps other projects clean
-- no flag (global) — you want it everywhere, always available
+## How it works
 
-### Option 2: Clone and Load Directly
+The plugin registers `PreToolUse` and `PostToolUse` hooks that run on every `Edit` and `Write` tool call. No manual invocation needed.
 
-```bash
-git clone https://github.com/Martinrodriguezc/change-tracker.git
-claude --plugin-dir ./change-tracker
-```
+| What happens | When |
+|---|---|
+| Change captured to `~/.claude-change-tracker/current-session.jsonl` | Every Edit/Write |
+| AI explanation generated (Haiku) | After each change |
+| Commit message + PR description generated (Haiku) | After each change (debounced) |
+| Live dashboard updated via SSE | Real-time |
+| Browser auto-opens | On first change of the session |
 
-This loads the plugin for a single session without installing it permanently.
+### Live dashboard
 
-### Option 3: Manual Install (no marketplace)
+The dashboard runs at `http://localhost:8877` and includes:
 
-Copy the skill directly into your Claude skills directory:
+- **Real-time diffs** with line numbers and colored additions/removals
+- **AI explanations** that appear after each change (categorized as feat/fix/refactor/style/docs/test)
+- **Commit message panel** with copy button
+- **PR description panel** with copy button (What/Why/How/Changes/How to test)
+- **File sidebar** with change counts
+- **Search** across files, code, and explanations
+- **Dark/light mode** (remembers preference)
+- **Keyboard navigation** (`j`/`k` to navigate, `/` to search)
+- **Connection indicator** (green = live, auto-reconnects)
 
-```bash
-git clone https://github.com/Martinrodriguezc/change-tracker.git
-cp -r change-tracker/plugins/change-tracker/skills/change-tracker ~/.claude/skills/change-tracker
-```
+### Session management
 
-This bypasses the plugin system entirely. The skill will be available in all sessions but won't receive automatic updates.
-
-## How It Works
-
-### Automatic Mode (Proactive)
-
-The skill activates automatically when Claude is about to edit code. It:
-
-1. Creates a JSON changelog in `/tmp/` at the start of the task
-2. Records each edit immediately after it happens — the exact old and new code, a detailed explanation, PROs/CONs, and optional notes
-3. Generates and opens the HTML report when the task is done
-
-You don't need to do anything — it just works in the background.
-
-### Retroactive Mode
-
-Already made changes and want to see them? The skill can extract changes from `git diff` and reconstruct the changelog retroactively:
-
-- **Uncommitted changes** (staged + unstaged) — default
-- **Last N commits** — `--commits 3`
-- **Specific ref range** — `--range main..HEAD`
-
-Just ask Claude: _"show me what changed"_, _"generate a changelog of recent changes"_, or _"review the last 3 commits"_
-
-Claude will extract the diffs, read the code to understand context, fill in explanations and PROs/CONs, and generate the HTML report.
-
-### Generating PR Descriptions
-
-After a task is complete, generate a ready-to-use PR body from the changelog:
+Sessions are stored persistently in `~/.claude-change-tracker/`. When you open a new Claude Code conversation, the previous session is automatically archived. The last 20 sessions are kept.
 
 ```bash
-# Output to stdout
-python3 <scripts-dir>/to_pr_description.py /tmp/claude-changes-XXX.json
-
-# Copy to clipboard (macOS)
-python3 <scripts-dir>/to_pr_description.py /tmp/claude-changes-XXX.json --copy
-
-# Use directly with gh
-gh pr create --title "feat: my feature" --body "$(python3 <scripts-dir>/to_pr_description.py /tmp/claude-changes-XXX.json)"
+# These commands are available via the skill — just ask Claude:
+# "list my sessions", "show previous session", "rotate session"
 ```
 
-The PR description includes a summary, per-file change list with reasons, trade-offs section (from CONs), notes, and a test plan checklist.
+### Commit messages & PR descriptions
 
-## What Each Change Includes
+Generated automatically in the background. Access them via:
 
-| Field | Description |
-|-------|-------------|
-| **File path** | Which file was modified |
-| **Category** | `fix`, `feature`, `refactor`, `style`, `docs`, or `test` |
-| **Explanation** | Context, what changed, and why the new code is correct |
-| **PROs** | Advantages of this change (displayed in green with checkmarks) |
-| **CONs** | Trade-offs or downsides (displayed in red with X marks) |
-| **Notes** | Follow-up suggestions, warnings, or dependencies to watch |
-| **Diff** | Unified diff showing exactly what lines changed |
+- The **summary panel** in the live dashboard (click the pencil or refresh icon in the header)
+- Ask Claude: _"show me the commit message"_, _"prepare the PR"_
+- CLI: `python3 <scripts>/commit_message.py` or `python3 <scripts>/to_pr_description.py`
 
-PROs, CONs, and Notes are optional — trivial changes (renames, typo fixes) skip them.
+### Retroactive mode
 
-## What the HTML Report Looks Like
+If you made changes before installing the plugin, extract them from git:
 
-Each change card shows:
-
-```
-┌──────────────────────────────────────────────────────────┐
-│  /src/services/auth.service.ts              #1  FEATURE  │
-│                                                          │
-│  The generateToken function previously returned a single │
-│  JWT valid for 24h. This splits it into a short-lived    │
-│  access token (15min) and a long-lived refresh token     │
-│  (7 days). The short access token limits damage if       │
-│  stolen, while refresh allows seamless session renewal.  │
-│                                                          │
-│  ✓ Reduces exposure window — stolen token useless in 15m │
-│  ✓ Refresh token rotation limits damage from theft       │
-│  ✗ Frontend must handle refresh flow (more complexity)   │
-│                                                          │
-│  📝 Consider Redis blacklist for revoked refresh tokens  │
-│     if user count exceeds ~10K.                          │
-│                                                          │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │  @@ -1,7 +1,15 @@                                 │  │
-│  │ - export function generateToken(user): string {    │  │
-│  │ + export function generateToken(user): {           │  │
-│  │ +   accessToken: string;                           │  │
-│  │ +   refreshToken: string;                          │  │
-│  │ + } {                                              │  │
-│  │     const accessToken = jwt.sign(                  │  │
-│  │ -     { expiresIn: '24h' }                         │  │
-│  │ +     { expiresIn: '15m' }                         │  │
-│  │     );                                             │  │
-│  └────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
+```bash
+python3 <scripts>/from_git_diff.py --repo .          # uncommitted changes
+python3 <scripts>/from_git_diff.py --commits 3       # last 3 commits
+python3 <scripts>/from_git_diff.py --range main..HEAD # specific range
 ```
 
-The sidebar lets you navigate by file, filter by category, and search by text. Large diffs (100+ lines) are collapsed by default with an expand button.
+## Trigger phrases
 
-## Keyboard Shortcuts
+The skill activates automatically via hooks, but you can also invoke it by saying things like:
 
-| Key | Action |
-|-----|--------|
-| `j` / `↓` | Next change |
-| `k` / `↑` | Previous change |
-| `/` | Focus search |
-| `Escape` | Clear focus / blur search |
+- _"show changes"_, _"what did you change"_, _"changelog"_
+- _"generate commit"_, _"prepare PR"_, _"commit message"_
+- _"list sessions"_, _"previous session"_
+- _"que cambiaste"_, _"muestra los cambios"_, _"genera el commit"_
 
 ## Requirements
 
-- **Claude Code** (CLI, desktop app, or IDE extension)
-- **Python 3.6+** (pre-installed on macOS and most Linux distros)
-- **Git** (only needed for retroactive mode)
+- **Claude Code** (CLI, desktop, web, or IDE extension)
+- **Python 3.9+**
+- **Git** (only for retroactive mode)
 
-No npm packages, no pip installs, no external dependencies.
+No npm, no pip, no external dependencies. Python stdlib only.
 
 ## Updating
 
 ```bash
-# If installed via marketplace
 claude plugin update change-tracker
-
-# If cloned manually
-cd path/to/change-tracker && git pull
 ```
 
 ## License

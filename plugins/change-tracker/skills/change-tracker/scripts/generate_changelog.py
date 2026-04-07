@@ -11,9 +11,19 @@ import json
 import sys
 import difflib
 import webbrowser
+import html as html_module
 from pathlib import Path
 from datetime import datetime
 from collections import Counter, defaultdict
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+from shared_utils import load_explanations as _load_explanations, compute_common_prefix as _compute_common_prefix, EXPLANATIONS_FILE
+
+# Session path (preferred) and legacy fallback
+_SESSION_DIR = Path.home() / ".claude-change-tracker"
+_DEFAULT_SESSION = _SESSION_DIR / "current-session.jsonl"
+_LEGACY_PATH = Path("/tmp/claude-change-tracker.jsonl")
 
 
 def compute_char_segments(old_text: str, new_text: str) -> tuple:
@@ -146,45 +156,39 @@ def compute_diff(old_text: str, new_text: str) -> list:
     return lines
 
 
-def compute_stats(processed: list) -> dict:
-    """Compute summary statistics from already-processed changes with diff_lines."""
+def compute_stats(changes: list) -> dict:
+    """Compute summary statistics."""
     files = set()
     lines_added = 0
     lines_removed = 0
     by_category = Counter()
 
-    for change in processed:
+    for change in changes:
         files.add(change.get("file", "unknown"))
         by_category[change.get("category", "other")] += 1
 
-        for line in change.get("diff_lines", []):
-            if line["type"] == "add":
+        old_text = change.get("old_text", "")
+        new_text = change.get("new_text", "")
+        old_lines = old_text.splitlines() if old_text else []
+        new_lines = new_text.splitlines() if new_text else []
+
+        diff = list(difflib.unified_diff(old_lines, new_lines, lineterm="", n=2))
+        for line in diff[2:]:  # Skip headers
+            if line.startswith("+") and not line.startswith("+++"):
                 lines_added += 1
-            elif line["type"] == "remove":
+            elif line.startswith("-") and not line.startswith("---"):
                 lines_removed += 1
 
     return {
         "files_changed": len(files),
-        "total_edits": len(processed),
+        "total_edits": len(changes),
         "lines_added": lines_added,
         "lines_removed": lines_removed,
         "by_category": dict(by_category),
     }
 
 
-def compute_common_prefix(paths: list) -> str:
-    """Find the longest common directory prefix across all file paths."""
-    if not paths:
-        return ""
-    parts = [p.split("/") for p in paths]
-    prefix = []
-    for segments in zip(*parts):
-        if len(set(segments)) == 1:
-            prefix.append(segments[0])
-        else:
-            break
-    result = "/".join(prefix)
-    return result + "/" if result else ""
+compute_common_prefix = _compute_common_prefix
 
 
 def build_embedded_data(changelog: dict) -> dict:
@@ -230,7 +234,7 @@ def build_embedded_data(changelog: dict) -> dict:
     return {
         "task": changelog.get("task", ""),
         "timestamp": changelog.get("timestamp", ""),
-        "stats": compute_stats(processed),
+        "stats": compute_stats(changes),
         "changes": processed,
         "files": files,
         "categories": categories,
@@ -522,82 +526,6 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
   .category-badge.test { background: rgba(200,122,42,0.1); color: var(--orange); border: 1px solid rgba(200,122,42,0.3); }
   .category-badge.other { background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
 
-  /* PR Description section */
-  .pr-section {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    margin-bottom: 20px;
-    box-shadow: var(--shadow);
-    overflow: hidden;
-  }
-  .pr-header {
-    padding: 14px 18px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .pr-header-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .pr-header h3 {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text);
-    margin: 0;
-  }
-  .pr-header .pr-icon {
-    font-size: 16px;
-    opacity: 0.6;
-  }
-  .pr-tabs {
-    display: flex;
-    gap: 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .pr-tab {
-    padding: 8px 16px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-muted);
-    background: none;
-    border: none;
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    transition: all 0.15s;
-  }
-  .pr-tab:hover { color: var(--text); }
-  .pr-tab.active {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-  }
-  .pr-content {
-    padding: 16px 18px;
-    font-family: var(--mono);
-    font-size: 12.5px;
-    line-height: 1.6;
-    white-space: pre-wrap;
-    color: var(--text);
-    max-height: 300px;
-    overflow-y: auto;
-  }
-  .pr-copy-btn {
-    padding: 5px 12px;
-    font-size: 11px;
-    font-weight: 600;
-    background: var(--surface-hover);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-  .pr-copy-btn:hover { background: var(--border); color: var(--text); }
-  .pr-copy-btn.copied { background: var(--green-bg); color: var(--green); border-color: var(--green-border); }
-
   /* Main content */
   .main {
     flex: 1;
@@ -824,10 +752,7 @@ HTML_TEMPLATE = r'''<!DOCTYPE html>
     <div class="file-list" id="fileList"></div>
   </div>
 
-  <div class="main" id="mainScroll">
-    <div class="pr-section" id="prSection"></div>
-    <div id="mainContent"></div>
-  </div>
+  <div class="main" id="mainContent"></div>
 </div>
 
 <script>
@@ -1094,25 +1019,36 @@ function renderChanges() {
         toggle.className = 'diff-collapse-toggle';
         toggle.textContent = 'Mostrar diff completo (' + diffLines.length + ' lineas)';
         let expanded = false;
-        function fillTable(lines) {
-          table.innerHTML = '';
-          lines.forEach(line => {
-            const tr = document.createElement('tr');
-            tr.className = 'diff-' + line.type;
-            tr.innerHTML =
-              '<td class="line-num">' + (line.old_num != null ? line.old_num : '') + '</td>'
-              + '<td class="line-num">' + (line.new_num != null ? line.new_num : '') + '</td>'
-              + '<td class="line-sign">' + (line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ') + '</td>'
-              + '<td class="line-content">' + renderLineContentHtml(line) + '</td>';
-            table.appendChild(tr);
-          });
-        }
         toggle.addEventListener('click', () => {
-          expanded = !expanded;
-          fillTable(expanded ? diffLines : diffLines.slice(0, 100));
-          toggle.textContent = expanded
-            ? 'Colapsar diff'
-            : 'Mostrar diff completo (' + diffLines.length + ' lineas)';
+          if (!expanded) {
+            table.innerHTML = '';
+            diffLines.forEach(line => {
+              const tr = document.createElement('tr');
+              tr.className = 'diff-' + line.type;
+              tr.innerHTML =
+                '<td class="line-num">' + (line.old_num != null ? line.old_num : '') + '</td>'
+                + '<td class="line-num">' + (line.new_num != null ? line.new_num : '') + '</td>'
+                + '<td class="line-sign">' + (line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ') + '</td>'
+                + '<td class="line-content">' + renderLineContentHtml(line) + '</td>';
+              table.appendChild(tr);
+            });
+            toggle.textContent = 'Colapsar diff';
+            expanded = true;
+          } else {
+            table.innerHTML = '';
+            diffLines.slice(0, 100).forEach(line => {
+              const tr = document.createElement('tr');
+              tr.className = 'diff-' + line.type;
+              tr.innerHTML =
+                '<td class="line-num">' + (line.old_num != null ? line.old_num : '') + '</td>'
+                + '<td class="line-num">' + (line.new_num != null ? line.new_num : '') + '</td>'
+                + '<td class="line-sign">' + (line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ') + '</td>'
+                + '<td class="line-content">' + renderLineContentHtml(line) + '</td>';
+              table.appendChild(tr);
+            });
+            toggle.textContent = 'Mostrar diff completo (' + diffLines.length + ' lineas)';
+            expanded = false;
+          }
         });
         diffContainer.appendChild(toggle);
       }
@@ -1216,323 +1152,7 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
-// ── PR / Commit Description Generator ──
-
-// Classify a line of code by its semantic type
-function classifyLine(line) {
-  const t = line.trim();
-  if (!t) return null;
-  if (/^\/\/|^\/\*|^\*|^#/.test(t)) return 'comment';
-  if (/^import\s|^from\s.*import|^require\(|^export\s/.test(t)) return 'import';
-  if (/^(export\s+)?(function|const|let|var|class|interface|type|enum)\s/.test(t)) return 'declaration';
-  if (/^(async\s+)?function\s|=>\s*\{/.test(t)) return 'function';
-  if (/className=|style=|css|tailwind|bg-|text-|flex|grid|rounded|border|shadow|padding|margin/i.test(t)) return 'styling';
-  if (/useState|useEffect|useRef|useMemo|useCallback|useContext|useQuery|useMutation/.test(t)) return 'hook';
-  if (/\.test\(|\.spec\(|describe\(|it\(|expect\(|assert/.test(t)) return 'test';
-  if (/router\.|route|path:|redirect|navigate|middleware|endpoint/i.test(t)) return 'routing';
-  if (/catch\(|throw\s|Error\(|reject\(|\.error|console\.error/.test(t)) return 'error-handling';
-  if (/config|\.env|setting|option|flag|toggle|enable|disable/i.test(t)) return 'config';
-  if (/prisma|query|where:|select:|include:|findMany|findUnique|create\(|update\(|delete\(/.test(t)) return 'database';
-  if (/fetch\(|axios|\.get\(|\.post\(|\.put\(|\.delete\(|api|endpoint/i.test(t)) return 'api';
-  if (/return\s|return\(/.test(t)) return 'return';
-  return 'logic';
-}
-
-// Get human-readable area from file path
-function describeArea(filePath) {
-  const p = filePath.toLowerCase();
-  if (p.includes('/components/')) return 'UI component';
-  if (p.includes('/pages/') || p.includes('/views/')) return 'page';
-  if (p.includes('/hooks/')) return 'custom hook';
-  if (p.includes('/services/')) return 'service layer';
-  if (p.includes('/routers/') || p.includes('/routes/')) return 'API route';
-  if (p.includes('/controllers/')) return 'controller';
-  if (p.includes('/middleware/')) return 'middleware';
-  if (p.includes('/validators/')) return 'validator';
-  if (p.includes('/utils/') || p.includes('/helpers/')) return 'utility';
-  if (p.includes('/types/') || p.includes('.d.ts')) return 'type definition';
-  if (p.includes('/styles/') || p.endsWith('.css')) return 'stylesheet';
-  if (p.includes('/config/') || p.includes('.config.')) return 'configuration';
-  if (p.includes('prisma')) return 'database schema';
-  if (p.includes('test') || p.includes('spec')) return 'test';
-  if (p.includes('.json')) return 'config file';
-  if (p.includes('.md')) return 'documentation';
-  if (p.includes('.sh')) return 'shell script';
-  if (p.includes('.py')) return 'Python script';
-  return 'source file';
-}
-
-// Analyze all diffs for a file and produce a semantic summary
-function analyzeFile(file, edits) {
-  const types = {};
-  let totalAdded = 0, totalRemoved = 0;
-
-  edits.forEach(e => {
-    const dl = e.diff_lines || [];
-    dl.forEach(l => {
-      if (l.type === 'add') {
-        totalAdded++;
-        const cls = classifyLine(l.text);
-        if (cls) types[cls] = (types[cls] || 0) + 1;
-      } else if (l.type === 'remove') {
-        totalRemoved++;
-      }
-    });
-  });
-
-  const isCreate = edits.some(e => e.type === 'create');
-  const isRewrite = edits.some(e => e.type === 'rewrite');
-  const area = describeArea(file);
-  const sorted = Object.entries(types).sort((a, b) => b[1] - a[1]);
-  const dominant = sorted[0] ? sorted[0][0] : 'logic';
-
-  // Build a natural description
-  const parts = [];
-
-  if (isCreate) {
-    parts.push('Created new ' + area + ' (' + totalAdded + ' lines)');
-  } else if (isRewrite) {
-    parts.push('Rewrote ' + area + ' (' + totalAdded + ' lines added, ' + totalRemoved + ' removed)');
-  } else {
-    // Describe by dominant change type
-    const actions = [];
-    if (types['comment']) actions.push('updated comments/documentation');
-    if (types['import']) actions.push('modified imports');
-    if (types['declaration'] || types['function']) actions.push('changed function/variable declarations');
-    if (types['styling']) actions.push('updated styling/layout');
-    if (types['hook']) actions.push('modified React hooks');
-    if (types['routing']) actions.push('updated routing');
-    if (types['config']) actions.push('changed configuration');
-    if (types['database']) actions.push('modified database queries');
-    if (types['api']) actions.push('updated API calls');
-    if (types['error-handling']) actions.push('improved error handling');
-    if (types['test']) actions.push('updated tests');
-    if (types['logic'] && !actions.length) actions.push('updated business logic');
-
-    if (actions.length) {
-      parts.push(actions.slice(0, 3).join(', ') + ' in ' + area);
-    } else {
-      parts.push('edited ' + area + ' (' + edits.length + ' change' + (edits.length > 1 ? 's' : '') + ')');
-    }
-
-    if (totalAdded + totalRemoved > 0) {
-      parts.push('+' + totalAdded + '/-' + totalRemoved + ' lines');
-    }
-  }
-
-  return { description: parts[0], stats: parts[1] || '', dominant, isCreate, isRewrite, totalAdded, totalRemoved };
-}
-
-function generateDescriptions() {
-  const changes = CHANGELOG_DATA.changes;
-  if (!changes.length) return;
-
-  const files = [...new Set(changes.map(c => c.file))];
-  const prefix = computePrefix(files);
-
-  // Group changes by file (using short path)
-  const byFile = {};
-  changes.forEach(c => {
-    const short = c.file.slice(prefix.length) || c.file;
-    if (!byFile[short]) byFile[short] = { edits: [], fullPath: c.file };
-    byFile[short].edits.push(c);
-  });
-
-  // Analyze each file
-  const analyses = {};
-  Object.entries(byFile).forEach(([file, data]) => {
-    analyses[file] = analyzeFile(data.fullPath, data.edits);
-  });
-
-  // Detect overall intent
-  const allDominant = Object.values(analyses).map(a => a.dominant);
-  const hasNewFiles = Object.values(analyses).some(a => a.isCreate);
-  const hasRewrites = Object.values(analyses).some(a => a.isRewrite);
-  const dominantCounts = {};
-  allDominant.forEach(d => dominantCounts[d] = (dominantCounts[d] || 0) + 1);
-  const topDominant = Object.entries(dominantCounts).sort((a,b) => b[1]-a[1])[0][0];
-
-  // Choose commit prefix based on what actually changed
-  let commitPrefix = 'chore';
-  if (hasNewFiles) commitPrefix = 'feat';
-  else if (topDominant === 'styling') commitPrefix = 'style';
-  else if (topDominant === 'comment') commitPrefix = 'docs';
-  else if (topDominant === 'test') commitPrefix = 'test';
-  else if (topDominant === 'config') commitPrefix = 'chore';
-  else if (topDominant === 'error-handling') commitPrefix = 'fix';
-  else commitPrefix = 'feat';
-
-  const task = CHANGELOG_DATA.task || '';
-  const stats = CHANGELOG_DATA.stats || {};
-
-  // ── Commit message ──
-  const commitLines = [];
-
-  // Title
-  if (task && task !== 'Session changes') {
-    commitLines.push(commitPrefix + ': ' + task);
-  } else {
-    // Generate title from analyses
-    const summaries = Object.values(analyses).map(a => a.description);
-    if (summaries.length === 1) {
-      commitLines.push(commitPrefix + ': ' + summaries[0]);
-    } else {
-      // Find common theme
-      const areas = [...new Set(Object.entries(byFile).map(([_, d]) => describeArea(d.fullPath)))];
-      if (areas.length === 1) {
-        commitLines.push(commitPrefix + ': update ' + areas[0] + ' (' + files.length + ' files)');
-      } else {
-        commitLines.push(commitPrefix + ': update ' + areas.slice(0, 3).join(', '));
-      }
-    }
-  }
-  commitLines.push('');
-
-  // Body: one line per file with semantic description
-  Object.entries(analyses).forEach(([file, analysis]) => {
-    const line = analysis.stats
-      ? '- ' + file + ': ' + analysis.description + ' (' + analysis.stats + ')'
-      : '- ' + file + ': ' + analysis.description;
-    commitLines.push(line);
-  });
-
-  // ── PR description ──
-  const prLines = [];
-
-  // What
-  prLines.push('## What');
-  prLines.push('');
-  if (task && task !== 'Session changes') {
-    prLines.push(task);
-  } else {
-    const summaries = Object.values(analyses).map(a => a.description);
-    prLines.push(summaries.join('. ') + '.');
-  }
-  prLines.push('');
-  prLines.push('**Scope:** ' + files.length + ' file(s) | +' + (stats.lines_added || 0) + '/-' + (stats.lines_removed || 0) + ' lines');
-  prLines.push('');
-
-  // Why (from reasons if available)
-  const allReasons = changes.map(c => c.reason).filter(Boolean);
-  if (allReasons.length) {
-    prLines.push('## Why');
-    prLines.push('');
-    [...new Set(allReasons)].forEach(r => prLines.push('- ' + r));
-    prLines.push('');
-  }
-
-  // How — semantic per-file breakdown
-  prLines.push('## Changes');
-  prLines.push('');
-  Object.entries(analyses).forEach(([file, analysis]) => {
-    let line = '- **' + file + '**: ' + analysis.description;
-    if (analysis.stats) line += ' (' + analysis.stats + ')';
-    prLines.push(line);
-  });
-  prLines.push('');
-
-  // Trade-offs
-  const allCons = changes.flatMap(c => c.cons || []);
-  if (allCons.length) {
-    prLines.push('## Trade-offs');
-    prLines.push('');
-    allCons.forEach(con => prLines.push('- ' + con));
-    prLines.push('');
-  }
-
-  // Notes
-  const allNotes = changes.map(c => (c.notes || '').trim()).filter(Boolean);
-  if (allNotes.length) {
-    prLines.push('## Notes');
-    prLines.push('');
-    allNotes.forEach(n => prLines.push('- ' + n));
-    prLines.push('');
-  }
-
-  // Test plan
-  prLines.push('## Test plan');
-  prLines.push('');
-  prLines.push('- [ ] Verify changes work as described');
-  prLines.push('- [ ] No regressions in affected areas');
-
-  return { commit: commitLines.join('\n'), pr: prLines.join('\n') };
-}
-
-function computePrefix(paths) {
-  if (!paths.length) return '';
-  const parts = paths.map(p => p.split('/'));
-  const prefix = [];
-  for (let i = 0; i < parts[0].length; i++) {
-    const seg = parts[0][i];
-    if (parts.every(p => p[i] === seg)) prefix.push(seg);
-    else break;
-  }
-  const r = prefix.join('/');
-  return r ? r + '/' : '';
-}
-
-function renderPrSection() {
-  const section = document.getElementById('prSection');
-  const desc = generateDescriptions();
-  if (!desc) { section.style.display = 'none'; return; }
-
-  const tabs = { commit: desc.commit, pr: desc.pr };
-  let activeTab = sessionStorage.getItem('ct-pr-tab') || 'commit';
-
-  section.innerHTML = '';
-
-  const header = document.createElement('div');
-  header.className = 'pr-header';
-  const headerLeft = document.createElement('div');
-  headerLeft.className = 'pr-header-left';
-  headerLeft.innerHTML = '<span class="pr-icon">\u{1F4CB}</span><h3>Commit / PR Description</h3>';
-  const copyBtn = document.createElement('button');
-  copyBtn.className = 'pr-copy-btn';
-  copyBtn.textContent = 'Copiar';
-  header.appendChild(headerLeft);
-  header.appendChild(copyBtn);
-  section.appendChild(header);
-
-  const tabBar = document.createElement('div');
-  tabBar.className = 'pr-tabs';
-  const commitTab = document.createElement('button');
-  commitTab.className = 'pr-tab' + (activeTab === 'commit' ? ' active' : '');
-  commitTab.textContent = 'Commit message';
-  const prTab = document.createElement('button');
-  prTab.className = 'pr-tab' + (activeTab === 'pr' ? ' active' : '');
-  prTab.textContent = 'PR description';
-  tabBar.appendChild(commitTab);
-  tabBar.appendChild(prTab);
-  section.appendChild(tabBar);
-
-  const content = document.createElement('div');
-  content.className = 'pr-content';
-  content.textContent = tabs[activeTab];
-  section.appendChild(content);
-
-  function switchTab(tab) {
-    activeTab = tab;
-    sessionStorage.setItem('ct-pr-tab', tab);
-    commitTab.className = 'pr-tab' + (tab === 'commit' ? ' active' : '');
-    prTab.className = 'pr-tab' + (tab === 'pr' ? ' active' : '');
-    content.textContent = tabs[tab];
-    copyBtn.textContent = 'Copiar';
-    copyBtn.className = 'pr-copy-btn';
-  }
-  commitTab.addEventListener('click', () => switchTab('commit'));
-  prTab.addEventListener('click', () => switchTab('pr'));
-
-  copyBtn.addEventListener('click', () => {
-    navigator.clipboard.writeText(tabs[activeTab]).then(() => {
-      copyBtn.textContent = '\u2713 Copiado';
-      copyBtn.className = 'pr-copy-btn copied';
-      setTimeout(() => { copyBtn.textContent = 'Copiar'; copyBtn.className = 'pr-copy-btn'; }, 2000);
-    });
-  });
-}
-
 // Initial render
-renderPrSection();
 renderFileList();
 renderCategoryFilters();
 renderChanges();
@@ -1544,27 +1164,7 @@ renderChanges();
 '''
 
 
-EXPLANATIONS_FILE = Path("/tmp/claude-change-tracker-explanations.jsonl")
-
-
-def load_explanations() -> dict:
-    """Load Claude-generated explanations keyed by change ID."""
-    explanations = {}
-    if not EXPLANATIONS_FILE.exists():
-        return explanations
-    try:
-        for line in EXPLANATIONS_FILE.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-                explanations[entry["id"]] = entry.get("explanation", "")
-            except (json.JSONDecodeError, KeyError):
-                continue
-    except Exception:
-        pass
-    return explanations
+load_explanations = _load_explanations
 
 
 def load_changelog(path: Path) -> dict:
@@ -1593,8 +1193,12 @@ def load_changelog(path: Path) -> dict:
             entry = json.loads(line)
             entry.setdefault("id", i)
             change_id = entry["id"]
-            if change_id in explanations and not entry.get("reason"):
-                entry["reason"] = explanations[change_id]
+            if change_id in explanations:
+                expl = explanations[change_id]
+                if not entry.get("reason"):
+                    entry["reason"] = expl["explanation"]
+                if not entry.get("category") or entry.get("category") == "other":
+                    entry["category"] = expl.get("category") or "other"
             entry.setdefault("reason", "")
             entry.setdefault("category", "other")
             entry.setdefault("pros", [])
@@ -1617,8 +1221,10 @@ def load_changelog(path: Path) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate HTML diff viewer from change-tracker changelog")
-    parser.add_argument("changelog", type=Path, nargs="?", default=Path("/tmp/claude-change-tracker.jsonl"),
-                        help="Path to changelog JSON/JSONL file (default: /tmp/claude-change-tracker.jsonl)")
+    # Use new session path, fall back to legacy /tmp/ path
+    default_path = _DEFAULT_SESSION if _DEFAULT_SESSION.exists() else _LEGACY_PATH
+    parser.add_argument("changelog", type=Path, nargs="?", default=default_path,
+                        help="Path to changelog JSON/JSONL file (default: ~/.claude-change-tracker/current-session.jsonl)")
     parser.add_argument("--output", "-o", type=Path, default=None, help="Output HTML path")
     parser.add_argument("--no-open", action="store_true", help="Don't open in browser")
     parser.add_argument("--live", action="store_true", help="Live mode: fixed path + auto-refresh HTML")

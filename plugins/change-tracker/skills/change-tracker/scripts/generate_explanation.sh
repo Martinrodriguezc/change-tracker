@@ -1,5 +1,5 @@
 #!/bin/bash
-# Generates a Claude-powered explanation for a code change.
+# Generates a Claude-powered explanation + category for a code change.
 # Called in background by hook-capture.sh — does NOT block the hook.
 
 EXPLANATIONS_FILE="/tmp/claude-change-tracker-explanations.jsonl"
@@ -9,10 +9,12 @@ if [ ! -f "$CHANGE_FILE" ]; then
   exit 0
 fi
 
-# Extract fields from the JSON change file
-CHANGE_ID=$(python3 -c "import json; print(json.load(open('$CHANGE_FILE'))['id'])" 2>/dev/null)
-FILE_PATH=$(python3 -c "import json; print(json.load(open('$CHANGE_FILE'))['file'])" 2>/dev/null)
-CHANGE_TYPE=$(python3 -c "import json; print(json.load(open('$CHANGE_FILE')).get('type','edit'))" 2>/dev/null)
+# Extract fields from the JSON change file (single parse)
+read CHANGE_ID FILE_PATH CHANGE_TYPE <<< $(python3 -c "
+import json, sys
+d = json.load(open('$CHANGE_FILE'))
+print(d.get('id',''), d.get('file',''), d.get('type','edit'))
+" 2>/dev/null)
 
 if [ -z "$CHANGE_ID" ]; then
   exit 0
@@ -31,15 +33,35 @@ else:
     print(f'File: {d[\"file\"]}\nChanged from:\n{old}\nTo:\n{new}')
 " 2>/dev/null | head -c 2000)
 
-EXPLANATION=$(claude -p "You are a commit message assistant. Given this code change, write a single concise sentence describing WHAT was changed, WHY it matters, and HOW it was done. Be specific — reference actual variable names, function names, or values from the diff. Do NOT be generic. Do NOT mention file paths. Output ONLY the sentence, nothing else.
+RESPONSE=$(claude -p --model haiku "You are a commit message assistant. Given this code change, respond with EXACTLY two lines:
+Line 1: One of these categories: feat, fix, refactor, style, docs, test
+Line 2: A single concise sentence describing WHAT was changed, WHY it matters, and HOW it was done. Be specific — reference actual variable names, function names, or values from the diff. Do NOT be generic. Do NOT mention file paths.
 
-$DIFF_SUMMARY" 2>/dev/null | head -1)
+Output ONLY those two lines, nothing else.
+
+$DIFF_SUMMARY" 2>/dev/null)
+
+CATEGORY=$(echo "$RESPONSE" | head -1 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+EXPLANATION=$(echo "$RESPONSE" | sed -n '2p')
+
+# Validate category — fall back to 'refactor' if invalid
+case "$CATEGORY" in
+  feat|fix|refactor|style|docs|test) ;;
+  feature) CATEGORY="feat" ;;
+  *) CATEGORY="refactor" ;;
+esac
+
+# If explanation is empty, the whole response might be on one line
+if [ -z "$EXPLANATION" ]; then
+  EXPLANATION=$(echo "$RESPONSE" | head -1)
+  CATEGORY="refactor"
+fi
 
 if [ -n "$EXPLANATION" ]; then
   python3 -c "
 import json, sys
-entry = {'id': int(sys.argv[1]), 'explanation': sys.argv[2]}
-with open(sys.argv[3], 'a') as f:
+entry = {'id': int(sys.argv[1]), 'explanation': sys.argv[2], 'category': sys.argv[3]}
+with open(sys.argv[4], 'a') as f:
     f.write(json.dumps(entry, ensure_ascii=False) + '\n')
-" "$CHANGE_ID" "$EXPLANATION" "$EXPLANATIONS_FILE" 2>/dev/null
+" "$CHANGE_ID" "$EXPLANATION" "$CATEGORY" "$EXPLANATIONS_FILE" 2>/dev/null
 fi
