@@ -1,26 +1,28 @@
 {
-  "PreToolUse": [
-    {
-      "matcher": "Write",
-      "hooks": [
-        {
-          "type": "command",
-          "command": "${CLAUDE_PLUGIN_ROOT}/skills/change-tracker/scripts/hook-pre-capture.sh",
-          "timeout": 5
-        }
-      ]
-    }
-  ],
-  "PostToolUse": [
-    {
-      "matcher": "Edit|Write",
-      "hooks": [
-        {
-          "type": "command",
-          "command": "${CLAUDE_PLUGIN_ROOT}/skills/change-tracker/scripts/hook-capture.sh",
-          "timeout": 5
-        }
-      ]
-    }
-  ]
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '_C=\"$HOME/.claude-change-tracker/.plugin-root\"; _R=\"${CLAUDE_PLUGIN_ROOT:-}\"; [ -z \"$_R\" ] && [ -f \"$_C\" ] && _R=\"$(cat \"$_C\")\"; [ -z \"$_R\" ] || [ ! -d \"$_R/skills\" ] && { _R=\"$(find \"$HOME/.claude/plugins\" -path \"*/change-tracker/scripts/hook-pre-capture.sh\" -print -quit 2>/dev/null)\"; [ -n \"$_R\" ] && _R=\"${_R%/skills/change-tracker/scripts/hook-pre-capture.sh}\" && mkdir -p \"$(dirname \"$_C\")\" && printf \"%s\" \"$_R\" > \"$_C\"; }; [ -n \"$_R\" ] && exec \"$_R/skills/change-tracker/scripts/hook-pre-capture.sh\"; exit 0'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '_C=\"$HOME/.claude-change-tracker/.plugin-root\"; _R=\"${CLAUDE_PLUGIN_ROOT:-}\"; [ -z \"$_R\" ] && [ -f \"$_C\" ] && _R=\"$(cat \"$_C\")\"; [ -z \"$_R\" ] || [ ! -d \"$_R/skills\" ] && { _R=\"$(find \"$HOME/.claude/plugins\" -path \"*/change-tracker/scripts/hook-capture.sh\" -print -quit 2>/dev/null)\"; [ -n \"$_R\" ] && _R=\"${_R%/skills/change-tracker/scripts/hook-capture.sh}\" && mkdir -p \"$(dirname \"$_C\")\" && printf \"%s\" \"$_R\" > \"$_C\"; }; [ -n \"$_R\" ] && exec \"$_R/skills/change-tracker/scripts/hook-capture.sh\"; exit 0'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
 }
