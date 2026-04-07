@@ -31,19 +31,26 @@ if [ -f "$OPENED_FLAG" ]; then
   fi
 fi
 
-# Auto-open browser on first change of the session
-if [ ! -f "$OPENED_FLAG" ] && [ -f "$LIVE_HTML" ]; then
+# Auto-start server + open browser on first change of the session
+if [ ! -f "$OPENED_FLAG" ]; then
   touch "$OPENED_FLAG"
+
+  # Start live SSE server if not already running
+  SERVER_RUNNING=false
   if [ -f "$HOME/.claude-change-tracker/server.pid" ]; then
-    PORT=$(python3 -c "import json; print(json.load(open('$HOME/.claude-change-tracker/server.pid')).get('port','8877'))" 2>/dev/null || echo "8877")
-    if kill -0 "$(python3 -c "import json; print(json.load(open('$HOME/.claude-change-tracker/server.pid')).get('pid',0))" 2>/dev/null)" 2>/dev/null; then
-      open "http://localhost:$PORT" >/dev/null 2>&1
-    else
-      open "$LIVE_HTML" >/dev/null 2>&1
+    SERVER_PID=$(python3 -c "import json; print(json.load(open('$HOME/.claude-change-tracker/server.pid')).get('pid',0))" 2>/dev/null || echo "0")
+    if kill -0 "$SERVER_PID" 2>/dev/null; then
+      SERVER_RUNNING=true
     fi
-  else
-    open "$LIVE_HTML" >/dev/null 2>&1
   fi
+
+  if [ "$SERVER_RUNNING" = false ]; then
+    python3 "$SCRIPT_DIR/serve_changelog.py" >/dev/null 2>&1
+  fi
+
+  # Open browser pointing to the live server
+  PORT=$(python3 -c "import json; print(json.load(open('$HOME/.claude-change-tracker/server.pid')).get('port','8877'))" 2>/dev/null || echo "8877")
+  open "http://localhost:$PORT" >/dev/null 2>&1
 fi
 
 # Launch Claude-powered explanation + summary in PARALLEL (fire-and-forget)
