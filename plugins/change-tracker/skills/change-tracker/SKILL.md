@@ -30,6 +30,17 @@ When the user asks to see changes ("muéstrame los cambios", "what changed", etc
 - If the live SSE server is running, point them to `http://localhost:8877` (or the active port)
 - Only invoke this skill's full flow if the user wants to START the live server, generate a STATIC report with explanations, or manage sessions
 
+## First-time setup (one-time)
+
+If hooks are not capturing changes, run the install script to register them in `~/.claude/settings.json`:
+
+```bash
+CHANGE_TRACKER_DIR=$(find ~/.claude -path "*/change-tracker/scripts/install.sh" -exec dirname {} \; 2>/dev/null | head -1) && echo "$CHANGE_TRACKER_DIR"
+bash "$CHANGE_TRACKER_DIR/install.sh"
+```
+
+This installs PostToolUse/PreToolUse hooks that auto-capture every Edit/Write. You only need to run this once.
+
 ## Quick start — Live server (preferred)
 
 ### Step 1 — Find the scripts

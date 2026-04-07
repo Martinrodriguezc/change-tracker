@@ -19,12 +19,20 @@ All of this happens in the background. You don't need to invoke anything.
 ## Installation
 
 ```bash
-# Add the marketplace (one-time)
+# 1. Add the marketplace (one-time)
 claude plugin marketplace add https://github.com/Martinrodriguezc/change-tracker
 
-# Install globally
+# 2. Install the plugin
 claude plugin install change-tracker
 
+# 3. Register the hooks (one-time — required due to Claude Code bug #24529)
+CHANGE_TRACKER_DIR=$(find ~/.claude -path "*/change-tracker/scripts/install.sh" -exec dirname {} \; 2>/dev/null | head -1)
+bash "$CHANGE_TRACKER_DIR/install.sh"
+```
+
+Step 3 adds PostToolUse/PreToolUse hooks to `~/.claude/settings.json`. This is needed because Claude Code currently doesn't load hooks from plugins ([#24529](https://github.com/anthropics/claude-code/issues/24529)). You only need to run it once.
+
+```bash
 # Or project-only
 claude plugin install change-tracker --scope project
 ```
